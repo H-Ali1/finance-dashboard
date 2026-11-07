@@ -3,7 +3,7 @@
 # the built React UI from a single process on port 8099. All state lives in /data.
 
 # --- build the UI -------------------------------------------------------------
-FROM node:22-alpine AS ui
+FROM node:25-alpine AS ui
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
