@@ -223,8 +223,11 @@ export interface Account {
   updated_at: string | null;
   holdings: {
     ticker: string;
+    name?: string;
     quantity: number;
     current_price: number;
+    /** Currency of current_price (the share's own, e.g. USD); value and ppl are in GBP. */
+    price_currency?: string;
     value: number;
     ppl: number;
   }[];

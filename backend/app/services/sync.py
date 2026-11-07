@@ -90,10 +90,21 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
             )
             if txn is None:
                 continue
-            # A pending row that settled: refresh amount/status, keep user edits.
+            # A pending row that settled, or a statement re-imported with its
+            # signs corrected: refresh amount/status, keep user edits.
+            sign_changed = (txn.amount_minor < 0) != (raw.amount_minor < 0)
             txn.amount_minor = raw.amount_minor
             txn.status = raw.status
             txn.booked_on = raw.booked_on
+            if sign_changed and txn.category_source != "manual" and not txn.is_transfer:
+                txn.category, txn.category_source = categorise(
+                    merchant=txn.merchant,
+                    description=txn.description,
+                    amount_minor=txn.amount_minor,
+                    mcc=txn.mcc,
+                    provider_category=txn.provider_category,
+                    rules=rules,
+                )
             continue
 
         category, source = categorise(

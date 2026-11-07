@@ -40,9 +40,10 @@ def list_connections(db: Session = Depends(get_db)) -> dict:
             },
             "trading212": {
                 "configured": settings.trading212_configured,
-                "how": "Trading 212 app -> Settings -> API (Beta) -> generate a read-only key, then "
-                "paste it into the App's Configuration tab in Home Assistant (or set "
-                "TRADING212_API_KEY in backend/.env when running locally)",
+                "how": "Trading 212 app -> Settings -> API -> Generate API key with the 'account' and "
+                "'portfolio' read permissions, then paste the key and its secret into the App's "
+                "Configuration tab in Home Assistant (TRADING212_API_KEY / TRADING212_API_SECRET in "
+                "backend/.env when running locally). A second account (e.g. your ISA) has its own key.",
             },
         },
     }

@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { api, useApi } from "../lib/api";
-import { timeAgo } from "../lib/format";
+import { money, timeAgo } from "../lib/format";
 import type { Account, Connection, ConnectionsResponse } from "../types";
 import { Card, Empty, ErrorBanner, Loading } from "./ui";
 
@@ -168,13 +168,14 @@ function StatementImport({ accounts, onImported }: { accounts: Account[]; onImpo
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
+  const [newKind, setNewKind] = useState("current");
 
   const createAccount = async () => {
     if (!newName) return;
     const form = new FormData();
     form.set("name", newName);
     form.set("institution", newName);
-    form.set("kind", "current");
+    form.set("kind", newKind);
     const created = await api.upload<{ id: number }>("/api/accounts/manual", form);
     setAccountId(String(created.id));
     setNewName("");
@@ -197,10 +198,18 @@ function StatementImport({ accounts, onImported }: { accounts: Account[]; onImpo
         rows_parsed: number;
         duplicates_skipped: number;
         detected_format: string;
+        first_date: string;
+        last_date: string;
+        money_in: number;
+        money_out: number;
+        signs_flipped: boolean;
       }>("/api/import/csv", form);
       setResult(
-        `Read ${response.rows_parsed} rows as ${response.detected_format}: ${response.added} added, ` +
-          `${response.duplicates_skipped} already there.`,
+        `Read ${response.rows_parsed} rows (${response.detected_format}) from ${response.first_date} to ` +
+          `${response.last_date}: ${money(response.money_out)} out, ${money(response.money_in)} in. ` +
+          `${response.added} added, ${response.duplicates_skipped} already there.` +
+          (response.signs_flipped ? " Signs were flipped to match a card statement." : "") +
+          " If money in and out look swapped, tick Flip signs and import the same file again — it corrects them.",
       );
       onImported();
     } catch (err) {
@@ -213,7 +222,7 @@ function StatementImport({ accounts, onImported }: { accounts: Account[]; onImpo
   return (
     <Card
       title="Import a statement"
-      hint="CSV exports from Starling and Amex are detected automatically; other banks use a generic date/description/amount mapping. Re-importing an overlapping file is safe — duplicates are skipped."
+      hint="CSV exports from Starling and Amex are recognised; other banks (HSBC, Chase, ...) use a generic date/description/amount mapping. Re-importing an overlapping file is safe — duplicates are skipped."
     >
       <form className="row" onSubmit={submit}>
         <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
@@ -248,6 +257,11 @@ function StatementImport({ accounts, onImported }: { accounts: Account[]; onImpo
           value={newName}
           onChange={(event) => setNewName(event.target.value)}
         />
+        <select value={newKind} onChange={(event) => setNewKind(event.target.value)} title="Account type">
+          <option value="current">Current account</option>
+          <option value="savings">Savings</option>
+          <option value="credit_card">Credit card</option>
+        </select>
         <button className="btn" onClick={createAccount} disabled={!newName}>
           Create account
         </button>

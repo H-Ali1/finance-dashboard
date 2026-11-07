@@ -37,7 +37,12 @@ class Settings(BaseSettings):
     starling_base_url: str = "https://api.starlingbank.com"
 
     # --- Trading 212 (Settings -> API in the app) ---------------------------
+    # One key + secret per account; the second pair is for a second account
+    # (e.g. Invest and Stocks ISA).
     trading212_api_key: str = ""
+    trading212_api_secret: str = ""
+    trading212_api_key_2: str = ""
+    trading212_api_secret_2: str = ""
     trading212_base_url: str = "https://live.trading212.com/api/v0"
 
     # --- app ---------------------------------------------------------------
@@ -73,7 +78,7 @@ class Settings(BaseSettings):
 
     @property
     def trading212_configured(self) -> bool:
-        return bool(self.trading212_api_key)
+        return bool(self.trading212_api_key.strip() or self.trading212_api_key_2.strip())
 
 
 def _app_options() -> dict:

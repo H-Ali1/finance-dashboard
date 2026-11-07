@@ -1,8 +1,9 @@
 """Starling Bank — direct personal access token.
 
 Create a token at https://developer.starlingbank.com (Personal Access) with the
-scopes: account:read, account-identifier:read, balance:read, transaction:read,
-savings-goal:read, space:read. Tokens are long-lived but revocable from the app.
+read-only scopes: account:read, account-list:read, balance:read,
+transaction:read, savings-goal:read, space:read. Tokens don't expire (100-year
+lifetime) and are revoked from the developer portal.
 """
 
 from __future__ import annotations

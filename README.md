@@ -61,9 +61,10 @@ you want. Restart the backend after editing it, then use the **Connections** tab
 ### Starling — direct, free, five minutes
 
 1. Sign in at [developer.starlingbank.com](https://developer.starlingbank.com).
-2. Create a **personal access token** with the `account:read`,
-   `account-identifier:read`, `balance:read`, `transaction:read` and
-   `savings-goal:read` scopes.
+2. Create a **personal access token** with only these read scopes:
+   `account:read`, `account-list:read`, `balance:read`, `transaction:read`,
+   `savings-goal:read` and `space:read`. Leave every `:create`/`:edit` scope
+   unticked. The token doesn't expire; revoke it in the portal to stop access.
 3. Set `STARLING_ACCESS_TOKEN` in `.env`.
 
 Savings spaces come through as separate accounts so they count toward net worth.
@@ -72,29 +73,53 @@ Savings spaces come through as separate accounts so they count toward net worth.
 
 None of these offers a personal API, and live Open Banking access needs an
 aggregator in between. Until one is chosen, export a CSV from each bank and use
-the statement importer below — everything downstream (categories, budgets,
+the statement importer below. Everything downstream (categories, budgets,
 subscriptions, net worth) works the same as for a live feed.
+
+- **HSBC:** online banking → the account → **Search and filter** → set the date
+  range → **Download** → CSV. Only the transaction list downloads as CSV; PDF
+  statements don't.
+- **Amex:** online account → **Statements & Activity** → pick the period →
+  **Download** → CSV. Create the account as a **Credit card**.
+- **Chase UK:** look in the app for an export or download option for
+  transactions. If it only offers PDF statements, Chase has to wait for a live
+  connection; the importer reads CSV only.
 
 ### Trading 212
 
-Trading 212 app → **Settings → API (Beta)** → generate a key with read scopes,
-then set `TRADING212_API_KEY`. Their rate limits are strict, so the balance and
-holdings are only fetched on an explicit sync. If you'd rather not mint a key,
-skip it and add the account as a manual asset instead.
+In the Trading 212 app: **Settings → API → Generate API key**, with only the
+**account** and **portfolio** read permissions. You get a key and a secret; the
+secret is shown once. Set `TRADING212_API_KEY` and `TRADING212_API_SECRET` (in
+Home Assistant: the App's Configuration tab).
+
+Each key belongs to one account. If you have both an Invest account and a
+Stocks ISA, generate a key from the other one too and set it as
+`TRADING212_API_KEY_2` / `TRADING212_API_SECRET_2`.
+
+Each sync fetches the account value, cash and holdings. Holding values and
+profit/loss are in pounds, and share prices in the share's own currency.
 
 ### Statement imports
 
-Connections → **Import a statement**. Starling and Amex CSV exports are detected
-from their headers; anything else (HSBC, Chase, ...) falls back to a generic
-date/description/amount or paid-in/paid-out mapping. Amex reports charges as positive numbers, which
-is handled automatically (the **Flip signs** box is there for anything unusual).
+Connections → **Import a statement**. Pick an account, or create one and choose
+its type (current, savings or credit card), then choose the file.
 
-Re-importing an overlapping file is safe: rows are fingerprinted on date, amount
-and description, so duplicates are skipped rather than doubled.
-
-Statement files carry a running balance we deliberately don't parse — the column
-is inconsistent across banks — so there's a **closing balance** field to keep net
-worth accurate for imported accounts.
+- **Formats.** Starling and Amex exports are recognised from their headers.
+  Anything else is read with a generic mapping: a date, a description, and
+  either one signed amount or separate paid-out / paid-in columns. A file
+  with no header row works if it has exactly one column of amounts;
+  otherwise you're asked to add a header line.
+- **Signs.** Money out should come out negative. Amex is flipped
+  automatically, and so is any statement imported into a credit-card account
+  where most rows are positive. The result says what was read: the dates
+  covered and the totals in and out. If they look swapped, tick **Flip signs**
+  and import the same file again; that corrects the rows instead of adding
+  them twice.
+- **Overlaps.** Re-importing an overlapping file is safe: rows are matched on
+  date, amount and description, so duplicates are skipped rather than doubled.
+- **Balances.** Statement files carry a running balance that isn't read (the
+  column differs between banks), so there's a **closing balance** field to
+  keep net worth accurate for imported accounts.
 
 ## Running it permanently
 

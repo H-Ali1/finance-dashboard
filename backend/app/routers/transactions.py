@@ -253,11 +253,21 @@ async def import_csv(
         raise HTTPException(status_code=404, detail="Account not found")
 
     content = await file.read()
-    detected = fmt or csv_import.sniff(content)
     try:
-        rows = csv_import.parse_csv(content, fmt=fmt, flip_sign=flip_sign)
+        parsed = csv_import.parse_statement(content, flip_sign=flip_sign)
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    rows = parsed.rows
+
+    # A card statement lists purchases; if they arrive as positive numbers
+    # (money in, by our convention) the file uses the card issuer's convention.
+    auto_flipped = False
+    if account.kind == "credit_card" and not parsed.flipped:
+        positive = sum(1 for r in rows if r.amount_minor > 0)
+        if positive > len(rows) / 2:
+            for r in rows:
+                r.amount_minor = -r.amount_minor
+            auto_flipped = True
 
     added = upsert_transactions(db, account, rows)
     pairs = detect_transfers(db)
@@ -270,12 +280,19 @@ async def import_csv(
         account.balance_updated_at = dt.datetime.now(dt.timezone.utc)
         db.commit()
 
+    money_out = sum(-r.amount_minor for r in rows if r.amount_minor < 0)
+    money_in = sum(r.amount_minor for r in rows if r.amount_minor > 0)
     return {
         "file": file.filename,
-        "detected_format": detected,
+        "detected_format": parsed.detected_format,
         "rows_parsed": len(rows),
         "added": added,
         "duplicates_skipped": len(rows) - added,
+        "first_date": min(r.booked_on for r in rows).isoformat(),
+        "last_date": max(r.booked_on for r in rows).isoformat(),
+        "money_in": to_major(money_in),
+        "money_out": to_major(money_out),
+        "signs_flipped": parsed.flipped or auto_flipped,
         "transfer_pairs": pairs,
         "account": account.name,
     }

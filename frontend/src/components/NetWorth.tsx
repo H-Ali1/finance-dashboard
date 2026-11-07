@@ -39,7 +39,9 @@ export default function NetWorth() {
   const data = nw.data;
   const series = history.data?.series ?? [];
   const change = history.data?.change ?? null;
-  const t212 = (accounts.data?.accounts ?? []).find((a) => a.provider === "trading212");
+  const t212Accounts = (accounts.data?.accounts ?? []).filter(
+    (a) => a.provider === "trading212" && a.holdings.length > 0,
+  );
 
   const refresh = () => setVersion((v) => v + 1);
 
@@ -144,13 +146,17 @@ export default function NetWorth() {
         </Card>
       </div>
 
-      {t212 && t212.holdings.length > 0 && (
-        <Card title="Trading 212 holdings" hint={`${money(t212.balance, true)} total · updated ${timeAgo(t212.updated_at)}`}>
+      {t212Accounts.map((t212) => (
+        <Card
+          key={t212.id}
+          title={t212Accounts.length > 1 ? `${t212.name} holdings` : "Trading 212 holdings"}
+          hint={`${money(t212.balance, true)} total · updated ${timeAgo(t212.updated_at)}`}
+        >
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Ticker</th>
+                  <th>Holding</th>
                   <th className="num">Units</th>
                   <th className="num">Price</th>
                   <th className="num">Value</th>
@@ -160,9 +166,12 @@ export default function NetWorth() {
               <tbody>
                 {t212.holdings.map((holding) => (
                   <tr key={holding.ticker}>
-                    <td>{holding.ticker}</td>
+                    <td>
+                      {holding.name || holding.ticker}
+                      {holding.name && <div className="muted tiny">{holding.ticker}</div>}
+                    </td>
                     <td className="num">{holding.quantity}</td>
-                    <td className="num">{money(holding.current_price)}</td>
+                    <td className="num">{sharePrice(holding.current_price, holding.price_currency)}</td>
                     <td className="num">{money(holding.value)}</td>
                     <td className={`num ${holding.ppl >= 0 ? "delta-up" : "delta-down"}`}>
                       {money(holding.ppl)}
@@ -173,7 +182,7 @@ export default function NetWorth() {
             </table>
           </div>
         </Card>
-      )}
+      ))}
 
       <ManualAssets assets={assets.data?.assets ?? []} onChange={refresh} />
 
@@ -369,4 +378,15 @@ function ManualAssets({ assets, onChange }: { assets: ManualAsset[]; onChange: (
       </form>
     </Card>
   );
+}
+
+/** A share price in its own currency: US shares are priced in dollars, not pounds. */
+function sharePrice(value: number, currency?: string): string {
+  if (!currency || currency === "GBP") return money(value);
+  if (currency === "GBX") return `${value.toLocaleString("en-GB", { maximumFractionDigits: 2 })}p`;
+  try {
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(value);
+  } catch {
+    return `${value} ${currency}`;
+  }
 }

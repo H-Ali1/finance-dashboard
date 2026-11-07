@@ -42,6 +42,9 @@ options:
 schema:
   starling_access_token: password?
   trading212_api_key: password?
+  trading212_api_secret: password?
+  trading212_api_key_2: password?
+  trading212_api_secret_2: password?
   trading212_base_url: url?
   sync_interval_hours: float(0,24)
   essential_categories: str?
