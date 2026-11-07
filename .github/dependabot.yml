@@ -19,12 +19,23 @@ updates:
     groups:
       frontend:
         patterns: ["*"]
-        update-types: [minor, patch] # major versions get their own pull request
+    ignore:
+      # Major versions (React 19, Vite 8, TypeScript 7, ...) need code changes,
+      # so they're done deliberately rather than proposed every month. Security
+      # fixes still arrive as their own pull requests.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # Node only builds the UI. Stay on the current LTS line (22) instead of
+      # being offered every new major, including short-lived odd-numbered ones;
+      # move to the next LTS by hand when 22 nears end of life (April 2027).
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
