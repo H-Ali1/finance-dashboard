@@ -25,8 +25,9 @@ Home Assistant: if it stops or crashes, Home Assistant carries on.
 
 | Option | What it does |
 |---|---|
-| Starling personal access token | From developer.starlingbank.com, Personal access, with the account, account-identifier, balance, transaction and savings-goal read scopes. |
-| Trading 212 API key | Trading 212 app, Settings, API. Read scopes only. |
+| Starling personal access token | From developer.starlingbank.com, Personal access. Tick only `account:read`, `account-list:read`, `balance:read`, `transaction:read`, `savings-goal:read` and `space:read`. |
+| Trading 212 API key and secret | Trading 212 app, Settings, API, Generate API key, with the "account" and "portfolio" read permissions. The secret is shown once. |
+| Trading 212 API key and secret (second account) | Optional: a key from your other account, if you have both an Invest account and a Stocks ISA. |
 | Trading 212 API address | Leave blank for the live account. |
 | Sync every (hours) | Automatic sync interval. Default 6. `0` turns it off; the Sync button still works. |
 | Essential categories | Comma-separated. Leave blank for the default list. |
@@ -34,7 +35,8 @@ Home Assistant: if it stops or crashes, Home Assistant carries on.
 Restart the App after changing options.
 
 HSBC, Chase and Amex have no live feed yet: export a CSV from each and use
-**Connections → Import a statement**.
+**Connections → Import a statement**. When you create the Amex account there,
+make it a **Credit card**.
 
 ## Access and security
 
@@ -72,6 +74,5 @@ The changelog shows what changed.
 
 ## Known limitations
 
-- The Trading 212 connector still uses Trading 212's older single-key
-  authentication. Their current API expects a key and a secret, so syncing it
-  may fail until the connector is updated.
+- HSBC, Chase and Amex are statement imports, not live feeds. The importer
+  reads CSV, so a bank that only offers PDF statements can't be imported yet.

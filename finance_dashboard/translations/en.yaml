@@ -2,12 +2,25 @@ configuration:
   starling_access_token:
     name: Starling personal access token
     description: >-
-      From developer.starlingbank.com, Personal access. Give it the account,
-      account-identifier, balance, transaction and savings-goal read scopes.
+      From developer.starlingbank.com, Personal access. Tick only
+      account:read, account-list:read, balance:read, transaction:read,
+      savings-goal:read and space:read.
   trading212_api_key:
     name: Trading 212 API key
     description: >-
-      Trading 212 app, Settings, API. Generate a key with read scopes only.
+      Trading 212 app, Settings, API, Generate API key. Tick only the "account"
+      and "portfolio" read permissions. Each key belongs to one account.
+  trading212_api_secret:
+    name: Trading 212 API secret
+    description: Shown once, alongside the key, when you generate it.
+  trading212_api_key_2:
+    name: Trading 212 API key (second account)
+    description: >-
+      Optional. If you have both an Invest account and a Stocks ISA, generate
+      a key from the other one too.
+  trading212_api_secret_2:
+    name: Trading 212 API secret (second account)
+    description: The secret that came with the second key.
   trading212_base_url:
     name: Trading 212 API address
     description: >-
