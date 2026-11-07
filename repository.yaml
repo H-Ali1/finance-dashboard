@@ -1,0 +1,6 @@
+# Copied to the top of the generated `ha-release` branch by CI. Home Assistant
+# reads that branch: add https://github.com/H-Ali1/finance-dashboard#ha-release
+# under Settings > Apps > App store > menu > Repositories.
+name: Finance Dashboard
+url: https://github.com/H-Ali1/finance-dashboard
+maintainer: H-Ali1
