@@ -1,0 +1,263 @@
+# Finance Dashboard
+
+A local budgeting and net-worth dashboard for UK personal finances. It pulls
+transactions from Starling, imports statements from HSBC, Chase, Amex and any
+other bank, values your Trading 212 account, tracks manual assets like the car
+and your pension, and tells you what's worth fixing.
+
+Everything runs on your machine. The database is a SQLite file in `backend/`,
+credentials live in `backend/.env`, and the only outbound network calls are to
+the bank APIs you configure yourself.
+
+## What it does
+
+- **Connects to your money.** Starling directly, Trading 212 for investments,
+  and a CSV statement importer for HSBC, Chase, Amex and anything else.
+- **Categorises automatically** using merchant keywords, card MCC codes and the
+  provider's own labels — with your own rules taking precedence.
+- **Detects internal transfers**, so paying the Amex off from your current
+  account doesn't look like a large purchase *and* a large income.
+- **Finds recurring payments** by cadence and amount stability rather than a
+  fixed brand list, then separates cancellable subscriptions from fixed bills
+  and flags price rises, duplicates across cards, and payments that stopped.
+- **Projects the month honestly.** Fixed commitments are projected from what's
+  actually scheduled; everyday spending is blended between your pace this month
+  and a typical month, so day 2 doesn't predict fifteen rents.
+- **Tracks net worth** across accounts, investments, pension and the car, with a
+  daily history so you can see the trend.
+- **Tells you what needs fixing** — a rules engine producing plain-English
+  findings, each with a pound figure attached and a stable key so dismissing one
+  makes it stay dismissed.
+
+## Quick start
+
+Try it with realistic sample data before connecting anything real:
+
+```bash
+cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+```
+
+```bash
+cd backend && .venv/Scripts/python seed_demo.py --reset
+```
+
+```bash
+cd backend && .venv/Scripts/python -m uvicorn app.main:app --reload
+```
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Open http://localhost:5173. The API docs are at http://localhost:8000/docs.
+
+On macOS/Linux the venv paths are `.venv/bin/` rather than `.venv/Scripts/`.
+
+## Connecting real accounts
+
+Copy `backend/.env.example` to `backend/.env` and fill in whichever providers
+you want. Restart the backend after editing it, then use the **Connections** tab.
+
+### Starling — direct, free, five minutes
+
+1. Sign in at [developer.starlingbank.com](https://developer.starlingbank.com).
+2. Create a **personal access token** with the `account:read`,
+   `account-identifier:read`, `balance:read`, `transaction:read` and
+   `savings-goal:read` scopes.
+3. Set `STARLING_ACCESS_TOKEN` in `.env`.
+
+Savings spaces come through as separate accounts so they count toward net worth.
+
+### HSBC, Chase and Amex — statement imports for now
+
+None of these offers a personal API, and live Open Banking access needs an
+aggregator in between. Until one is chosen, export a CSV from each bank and use
+the statement importer below — everything downstream (categories, budgets,
+subscriptions, net worth) works the same as for a live feed.
+
+### Trading 212
+
+Trading 212 app → **Settings → API (Beta)** → generate a key with read scopes,
+then set `TRADING212_API_KEY`. Their rate limits are strict, so the balance and
+holdings are only fetched on an explicit sync. If you'd rather not mint a key,
+skip it and add the account as a manual asset instead.
+
+### Statement imports
+
+Connections → **Import a statement**. Starling and Amex CSV exports are detected
+from their headers; anything else (HSBC, Chase, ...) falls back to a generic
+date/description/amount or paid-in/paid-out mapping. Amex reports charges as positive numbers, which
+is handled automatically (the **Flip signs** box is there for anything unusual).
+
+Re-importing an overlapping file is safe: rows are fingerprinted on date, amount
+and description, so duplicates are skipped rather than doubled.
+
+Statement files carry a running balance we deliberately don't parse — the column
+is inconsistent across banks — so there's a **closing balance** field to keep net
+worth accurate for imported accounts.
+
+## Running it permanently
+
+The `Dockerfile` builds one image that serves the API and the built UI from a
+single process on port 8099, keeps all state in `/data`, and runs its own
+background jobs: a sync every `SYNC_INTERVAL_HOURS` (default 6; `0` turns it
+off) and a daily database backup. `GET /api/health` is the liveness check for
+every platform below.
+
+### On Home Assistant (recommended)
+
+The dashboard runs as a Home Assistant **App**: its own container next to Home
+Assistant, opened from the sidebar behind HA's login. CI builds and tests the
+images, and Home Assistant installs and updates them from this repository:
+
+1. **Settings → Apps → App store → ⋮ → Repositories**, add
+   `https://github.com/H-Ali1/finance-dashboard#ha-release`
+2. Install **Finance Dashboard**, fill in its **Configuration** tab, and on its
+   **Info** tab turn on **Start on boot**, **Watchdog**, **Auto update** and
+   **Show in sidebar**.
+
+Full steps, options and backup notes are in
+[homeassistant/DOCS.md](homeassistant/DOCS.md), which also shows on the App's
+Documentation tab. To try unpublished changes on the device itself,
+`python scripts/package_ha_app.py` writes a copy to
+`build/ha-app/finance_dashboard/` that HA builds from source; copy it into
+`/addons`.
+
+### Plain Docker (Compose)
+
+```bash
+docker compose up -d --build
+```
+
+Then open http://127.0.0.1:8099. [docker-compose.yml](docker-compose.yml) restarts
+the container after a crash or reboot, checks its health every minute, reads
+credentials from `backend/.env`, and keeps data in the `finance-data` volume.
+The app has no login of its own, so the port is bound to localhost. Before
+opening it further, put an authenticating proxy in front. If that proxy has a
+fixed address, set `ALLOWED_CLIENT_IPS` to it so nothing else can connect.
+
+### Kubernetes
+
+The same image works as a pod:
+- **Run exactly one replica**, with the `Recreate` update strategy. SQLite
+  allows one writer, and two pods on one volume would corrupt it.
+- **Mount a persistent volume at `/data`.**
+- **Pass credentials as environment variables** from a Secret
+  (`STARLING_ACCESS_TOKEN`, `TRADING212_API_KEY`).
+- **Probe `/api/health` on port 8099** for liveness and readiness.
+- **Put authentication in front of the Service.**
+
+## Keeping it healthy
+
+**What happens on its own:**
+- **Crashes and hangs.** If the process exits, or `/api/health` stops answering
+  (the database or the background jobs have stopped), the platform restarts it:
+  HA's watchdog, Docker's restart policy, or a Kubernetes liveness probe.
+- **Failed syncs.** A provider being down or a network blip is retried after 15
+  minutes, then 30, 60, ... up to the normal interval.
+- **Backups.** A copy of the database goes to `/data/backups` every day, and the
+  last `BACKUP_KEEP_DAYS` (default 7) are kept. Another copy is taken before
+  every schema upgrade.
+- **A damaged database.** At startup the database is checked. If it's damaged,
+  it's moved aside (never deleted) and the newest good backup takes its place.
+  Bank feeds catch up at the next sync, and a warning appears under
+  **Needs fixing**.
+- **App updates.** Schema changes run automatically and in order
+  ([backend/app/migrations.py](backend/app/migrations.py)). A database from a
+  newer build is refused rather than damaged.
+
+**How changes reach Home Assistant** ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
+1. Every push and pull request runs the backend tests and the frontend
+   typecheck and build.
+2. A push to `main` that changes the app also releases it:
+   - builds the image for amd64 and for aarch64 (the HA Green);
+   - smoke-tests each image the way HA runs it, so a broken one is never
+     published;
+   - pushes them to `ghcr.io/h-ali1/{arch}-finance-dashboard`;
+   - publishes the App definition, with the new version and a changelog entry,
+     to the `ha-release` branch.
+3. Home Assistant checks that branch every 3 hours. With **Auto update** on, it
+   installs the update within about a day.
+
+The patch number goes up by one on every release. For a bigger jump, raise
+`version` in `homeassistant/config.yaml` (e.g. to `1.2.0`). Docs-only and
+test-only changes don't trigger a release. To release anyway, run the workflow
+from the Actions tab with **force release** ticked.
+
+**Dependencies.** [Dependabot](.github/dependabot.yml) opens one grouped pull
+request per ecosystem each month, plus security fixes as soon as they're
+published. CI tests each one; merging it releases it. Python versions live in
+`backend/requirements.in`. `backend/requirements.txt` is generated from it with
+every package pinned, so a rebuild never picks up something untested. To
+regenerate it by hand:
+
+```bash
+cd backend && docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c "pip install -q pip-tools && pip-compile --strip-extras --no-emit-index-url requirements.in"
+```
+
+To run the tests locally:
+
+```bash
+cd backend && .venv/Scripts/python -m pip install -r requirements-dev.txt && .venv/Scripts/python -m pytest tests
+```
+
+## Notes on the analysis
+
+**Sign convention.** `amount_minor` is signed pence from your point of view:
+negative is money out. This holds for credit cards too, so a purchase on Amex is
+negative and spend analysis never special-cases an account type. Some issuers
+report card debt as a positive balance; the per-account **Flip signs** toggle
+handles those.
+
+**Typical vs average.** A holiday drags a mean around for months, so the runway,
+projections and the "typical month" figures use a **median** across complete
+months. The mean is still reported alongside it.
+
+**Month-to-date comparisons.** Comparing three days of spending against whole
+previous months would say every category had collapsed, so category trends
+compare month-to-date against the same stretch of each previous month, and trend
+findings are suppressed in the first week.
+
+**Recurring detection** groups by account *and* merchant — the same service on
+two cards is two subscriptions, which is exactly the case worth flagging. A
+payment qualifies when at least three charges land at a regular cadence with a
+stable amount (median absolute deviation within 25–30%).
+
+**Anomalies** use median + MAD rather than mean + standard deviation, so one big
+transaction doesn't inflate the threshold that would have caught it. Scheduled
+payments are excluded — rent is much larger than a typical bill every month, and
+that's expected.
+
+## Layout
+
+```
+backend/
+  app/
+    providers/    starling, trading212, csv_import — normalise to RawAccount/RawTransaction
+    services/     categorise, transfers, sync, scheduler (background jobs), backup (copies + recovery)
+    migrations.py versioned schema changes
+    analytics/    spending, recurring, cashflow, anomalies, networth, insights
+    routers/      connections, accounts, transactions, analytics
+  seed_demo.py    14 months of realistic fake data
+frontend/
+  src/components/ one file per tab, plus shared ui.tsx
+  src/lib/        api client, formatting, the categorical colour assignment
+backend/tests/     API, serving/guard, migrations, backups, recovery, retries
+.github/          CI workflow, release helper, Dependabot
+homeassistant/    the Home Assistant App definition, option labels and its docs
+scripts/          package_ha_app.py — assembles the App folder for /addons
+Dockerfile        one image for Home Assistant, Docker and Kubernetes
+docker-compose.yml  restart policy + health check for running outside HA
+```
+
+## Privacy
+
+Bank data never leaves your machine. There is no telemetry, no cloud sync and no
+third-party analytics. The app has no login of its own. Locally the backend binds
+to localhost. On Home Assistant it only accepts connections from HA's ingress
+proxy, so HA's login protects it. Anywhere else, put it behind something that
+requires authentication.
+
+`.env` and `*.db` are gitignored. Revoke tokens from the provider's own app or
+dashboard — deleting a connection here does not revoke a Starling or Trading 212
+key.

@@ -1,0 +1,10 @@
+# Keep secrets, data and local tooling out of the image.
+**/.env
+**/*.db
+**/*.db-*
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+frontend/dist
+build

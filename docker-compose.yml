@@ -1,0 +1,30 @@
+# Running outside Home Assistant: `docker compose up -d --build`.
+# Credentials go in backend/.env (see backend/.env.example).
+services:
+  finance-dashboard:
+    build: .
+    image: finance-dashboard:local
+    # Come back after a crash, a Docker restart or a reboot.
+    restart: unless-stopped
+    # Localhost only: the app has no login. Put an authenticating proxy in
+    # front of it before opening it up any further.
+    ports:
+      - "127.0.0.1:8099:8099"
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      TZ: Europe/London
+    volumes:
+      - finance-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/api/health', timeout=8)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    # Generous ceiling; it normally uses well under 150 MB.
+    mem_limit: 512m
+
+volumes:
+  finance-data:

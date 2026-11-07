@@ -1,0 +1,26 @@
+# credentials and data — never commit these
+.env
+*.db
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+*.local
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# packaged Home Assistant App (scripts/package_ha_app.py)
+build/

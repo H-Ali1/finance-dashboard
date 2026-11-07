@@ -1,0 +1,14 @@
+# What the backend uses directly. requirements.txt is generated from this file
+# (every package, transitive ones included, at an exact version) and is what
+# the image installs. Regenerate it with pip-compile, or let Dependabot do it:
+#   docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c "pip install -q pip-tools && pip-compile --strip-extras requirements.in"
+fastapi
+uvicorn
+# The two fast paths uvicorn[standard] would add, without its dev-reload extras.
+uvloop; sys_platform != "win32"
+httptools
+sqlalchemy
+pydantic
+pydantic-settings
+httpx
+python-multipart

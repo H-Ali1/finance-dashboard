@@ -1,0 +1,35 @@
+# Keeps dependencies current with as little noise as possible: one grouped pull
+# request per ecosystem per month. CI tests each one; merging it releases to
+# Home Assistant like any other change. Security fixes arrive separately, as
+# soon as they're published.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend # requirements.in -> regenerates the pinned requirements.txt
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: [minor, patch] # major versions get their own pull request
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

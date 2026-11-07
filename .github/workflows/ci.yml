@@ -1,0 +1,187 @@
+# Every push and pull request: backend tests, frontend typecheck and build.
+#
+# Pushes to main that change the app also release it to Home Assistant:
+#   1. build the image for each architecture (amd64, and aarch64 for the HA Green)
+#   2. smoke-test the built image, so a broken one is never published
+#   3. push it to GitHub Container Registry, tagged with the new version
+#   4. publish the App definition with that version to the `ha-release` branch
+#      and tag the source commit vX.Y.Z
+# Home Assistant checks `ha-release` every few hours, offers the update, and
+# installs it on its own if the App's auto-update is on.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: Release even if nothing app-related changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One run at a time per branch, so two releases can never race. On pull
+# requests a newer push cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install
+        run: pip install -r backend/requirements-dev.txt
+      - name: Test
+        run: python -m pytest backend/tests -q
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  plan:
+    name: Decide on a release
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # history and tags, to see what changed since the last release
+      - id: plan
+        run: python3 .github/scripts/release.py plan ${{ inputs.force_release && '--force' || '' }}
+
+  images:
+    name: Image (${{ matrix.arch }})
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm # native ARM, no emulation
+    runs-on: ${{ matrix.runner }}
+    env:
+      IMAGE: ghcr.io/h-ali1/${{ matrix.arch }}-finance-dashboard
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: finance-dashboard:candidate
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.description=Finance Dashboard Home Assistant App
+            io.hass.type=addon
+            io.hass.version=${{ env.VERSION }}
+            io.hass.arch=${{ matrix.arch }}
+      - name: Smoke test the image
+        run: |
+          # Run it the way Home Assistant does: guard on, only the ingress proxy allowed.
+          docker run -d --name candidate -p 8099:8099 -e ALLOWED_CLIENT_IPS=172.30.32.2 finance-dashboard:candidate
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8099/api/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8099/api/health | tee /dev/stderr | grep -q '"status":"ok"'
+          # From outside, the health check answers but the dashboard is refused...
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/api/dashboard)" = 403
+          # ...and from inside the container everything works, UI included.
+          docker exec candidate python -c "import urllib.request as u; [u.urlopen('http://127.0.0.1:8099' + p) for p in ('/', '/api/dashboard')]"
+          docker logs candidate
+          if docker logs candidate 2>&1 | grep -qiE '^ERROR|Traceback'; then echo "errors in the log"; exit 1; fi
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        run: |
+          docker tag finance-dashboard:candidate "$IMAGE:$VERSION"
+          docker tag finance-dashboard:candidate "$IMAGE:latest"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
+
+  publish:
+    name: Publish to Home Assistant
+    needs: [plan, images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Update the ha-release branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads origin ha-release > /dev/null; then
+            git clone --quiet --depth 1 --branch ha-release "$url" "$RUNNER_TEMP/release"
+          else
+            git init --quiet "$RUNNER_TEMP/release"
+            git -C "$RUNNER_TEMP/release" checkout --quiet --orphan ha-release
+            git -C "$RUNNER_TEMP/release" remote add origin "$url"
+          fi
+          python3 .github/scripts/release.py assemble --version "$VERSION" --dest "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release"
+          git add --all
+          git commit --quiet -m "Finance Dashboard $VERSION" -m "Built from ${GITHUB_SHA}"
+          git push --quiet origin HEAD:refs/heads/ha-release
+      - name: Tag the released source
+        run: |
+          git tag -a "v$VERSION" "$GITHUB_SHA" -m "Finance Dashboard $VERSION"
+          git push --quiet origin "v$VERSION"
+      - name: Summary
+        run: |
+          {
+            echo "### Released $VERSION to Home Assistant"
+            echo "- Images: \`ghcr.io/h-ali1/{amd64,aarch64}-finance-dashboard:$VERSION\`"
+            echo "- App repository: \`https://github.com/${GITHUB_REPOSITORY}#ha-release\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,4 @@
+# Unix line endings everywhere: the code runs in Linux containers and CI.
+* text=auto eol=lf
+*.png binary
+*.ico binary

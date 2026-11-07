@@ -1,0 +1,25 @@
+configuration:
+  starling_access_token:
+    name: Starling personal access token
+    description: >-
+      From developer.starlingbank.com, Personal access. Give it the account,
+      account-identifier, balance, transaction and savings-goal read scopes.
+  trading212_api_key:
+    name: Trading 212 API key
+    description: >-
+      Trading 212 app, Settings, API. Generate a key with read scopes only.
+  trading212_base_url:
+    name: Trading 212 API address
+    description: >-
+      Leave blank for your live account. Use https://demo.trading212.com/api/v0
+      to try a practice account.
+  sync_interval_hours:
+    name: Sync every (hours)
+    description: >-
+      How often to pull from Starling and Trading 212 and record the day's net
+      worth. 0 turns automatic syncing off; the Sync button still works.
+  essential_categories:
+    name: Essential categories
+    description: >-
+      Comma-separated categories counted as unavoidable for the runway and
+      essential-spend figures. Leave blank for the default list.
