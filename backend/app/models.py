@@ -36,17 +36,27 @@ LIABILITY_KINDS = {"credit_card", "loan", "mortgage", "liability"}
 
 
 class Connection(Base):
-    """One configured link to a provider (Starling token, Trading 212 key, ...)."""
+    """One configured link to a provider (Starling token, Trading 212 key, ...).
+
+    Starling and Trading 212 have one each, with their keys in the settings.
+    TrueLayer has one per bank, and keeps that bank's refresh token here.
+    """
 
     __tablename__ = "connections"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    provider: Mapped[str] = mapped_column(String(32))  # starling|trading212
+    provider: Mapped[str] = mapped_column(String(32))  # starling|trading212|truelayer
     institution_name: Mapped[str] = mapped_column(String(128))
-    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|linked|error
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|linked|error|expired
     last_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # TrueLayer: the refresh token for this bank. Never sent to the browser.
+    secret: Mapped[str | None] = mapped_column(Text)
+    # TrueLayer: when the bank's 90 days of access end.
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # TrueLayer: which bank (provider_id), granted scopes, last attempt.
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
 
     accounts: Mapped[list[Account]] = relationship(back_populates="connection")
 

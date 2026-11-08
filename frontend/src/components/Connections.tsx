@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, useApi } from "../lib/api";
-import { money, timeAgo } from "../lib/format";
-import type { Account, Connection, ConnectionsResponse } from "../types";
+import { dateLabel, money, timeAgo } from "../lib/format";
+import type { Account, Connection, ConnectionsResponse, TrueLayerBank } from "../types";
 import { Card, Empty, ErrorBanner, Loading } from "./ui";
 
 const PROVIDER_LABEL: Record<string, string> = {
   starling: "Starling",
   trading212: "Trading 212",
+  truelayer: "TrueLayer",
   csv: "Statement import",
 };
 
@@ -17,6 +18,8 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
   const accounts = useApi<{ accounts: Account[] }>("/api/accounts", [version]);
   const [busy, setBusy] = useState<number | "all" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // A TrueLayer bank to connect again, chosen from the table.
+  const [reconnect, setReconnect] = useState<{ bankId: string; at: number } | null>(null);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBanner message={error} onRetry={reload} />;
@@ -31,11 +34,13 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
     setBusy(connection.id);
     setMessage(null);
     try {
-      const result = await api.post<{ transactions_added?: number }>(
+      const result = await api.post<{ transactions_added?: number; skipped?: string }>(
         `/api/connections/${connection.id}/sync`,
       );
       setMessage(
-        `${connection.institution_name}: ${result.transactions_added ?? 0} new transactions.`,
+        result.skipped
+          ? `${connection.institution_name}: ${result.skipped}`
+          : `${connection.institution_name}: ${result.transactions_added ?? 0} new transactions.`,
       );
       refresh();
     } catch (err) {
@@ -71,6 +76,17 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
         ))}
       </div>
 
+      {data.providers.truelayer?.configured && (
+        <ConnectBank
+          connections={data.connections}
+          reconnect={reconnect}
+          onConnected={(text) => {
+            setMessage(text);
+            refresh();
+          }}
+        />
+      )}
+
       <Card
         title="Connected"
         actions={
@@ -98,7 +114,10 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
         }
       >
         {data.connections.length === 0 ? (
-          <Empty>Nothing connected yet. Add a Starling or Trading 212 key to backend/.env, or import a statement file below.</Empty>
+          <Empty>
+            Nothing connected yet. Add a Starling, Trading 212 or TrueLayer key in the App's Configuration tab, or
+            import a statement file below.
+          </Empty>
         ) : (
           <div className="table-wrap">
             <table>
@@ -136,13 +155,31 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
                           {connection.last_error}
                         </div>
                       )}
+                      {connection.expires_at && connection.status !== "expired" && (
+                        <div className="muted tiny">Access ends {dateLabel(connection.expires_at, true)}</div>
+                      )}
                     </td>
                     <td className="num">{connection.account_count}</td>
                     <td className="secondary nowrap">{timeAgo(connection.last_synced_at)}</td>
                     <td className="num nowrap">
-                      <button className="btn" disabled={busy !== null} onClick={() => syncOne(connection)}>
-                        {busy === connection.id ? "Syncing…" : "Sync"}
-                      </button>{" "}
+                      {connection.provider === "truelayer" && connection.bank_id && (
+                        <>
+                          <button
+                            className={connection.status === "expired" ? "btn btn-primary" : "btn"}
+                            onClick={() => setReconnect({ bankId: connection.bank_id!, at: Date.now() })}
+                            title="Approve access again for another 90 days"
+                          >
+                            Connect again
+                          </button>{" "}
+                        </>
+                      )}
+                      {connection.status !== "expired" && (
+                        <>
+                          <button className="btn" disabled={busy !== null} onClick={() => syncOne(connection)}>
+                            {busy === connection.id ? "Syncing…" : "Sync"}
+                          </button>{" "}
+                        </>
+                      )}
                       <button className="btn btn-ghost" onClick={() => remove(connection)}>
                         Disconnect
                       </button>
@@ -156,6 +193,166 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
       </Card>
 
       <StatementImport accounts={accounts.data?.accounts ?? []} onImported={refresh} />
+    </div>
+  );
+}
+
+/**
+ * Connecting a bank through TrueLayer: pick it, approve at the bank in a new
+ * tab, then paste back the code TrueLayer shows. The dashboard never has to
+ * be reachable from the internet for this.
+ */
+function ConnectBank({
+  connections,
+  reconnect,
+  onConnected,
+}: {
+  connections: Connection[];
+  reconnect: { bankId: string; at: number } | null;
+  onConnected: (message: string) => void;
+}) {
+  const banks = useApi<{ banks: TrueLayerBank[] }>("/api/truelayer/banks");
+  const [bankId, setBankId] = useState("");
+  const [link, setLink] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [opened, setOpened] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [linkVersion, setLinkVersion] = useState(0);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // "Connect again" in the table picks the bank here.
+  useEffect(() => {
+    if (!reconnect) return;
+    setBankId(reconnect.bankId);
+    setLinkVersion((v) => v + 1);
+    setOpened(false);
+    setCode("");
+    setResult(null);
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [reconnect]);
+
+  // Each address works once, so a fresh one is made per attempt.
+  useEffect(() => {
+    setLink(null);
+    setLinkError(null);
+    if (!bankId) return;
+    const bank = banks.data?.banks.find((b) => b.provider_id === bankId);
+    let cancelled = false;
+    api
+      .post<{ url: string }>("/api/truelayer/link", { bank_id: bankId, scopes: bank?.scopes })
+      .then((response) => {
+        if (!cancelled) setLink(response.url);
+      })
+      .catch((err) => {
+        if (!cancelled) setLinkError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bankId, linkVersion, banks.data]);
+
+  const connectedIds = new Set(connections.filter((c) => c.provider === "truelayer").map((c) => c.bank_id));
+  const bankName = banks.data?.banks.find((b) => b.provider_id === bankId)?.name ?? "your bank";
+
+  const finish = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!code.trim()) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const response = await api.post<{ institution: string; accounts?: number; transactions_added?: number }>(
+        "/api/truelayer/connect",
+        { code: code.trim() },
+      );
+      onConnected(
+        `${response.institution} connected: ${response.accounts ?? 0} account(s), ` +
+          `${response.transactions_added ?? 0} transactions read.`,
+      );
+      setBankId("");
+      setOpened(false);
+      setCode("");
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : String(err));
+      setLinkVersion((v) => v + 1);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={cardRef}>
+      <Card
+        title="Connect a bank through TrueLayer"
+        hint="For HSBC, Amex and other UK banks. You approve read-only access on your bank's own screen. TrueLayer shows a test-mode notice there: it doesn't support personal use, so this can stop working without warning."
+      >
+        {banks.error ? (
+          <ErrorBanner message={banks.error} onRetry={banks.reload} />
+        ) : (
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="row">
+              <select
+                value={bankId}
+                onChange={(event) => {
+                  setBankId(event.target.value);
+                  setOpened(false);
+                  setResult(null);
+                }}
+              >
+                <option value="">{banks.loading ? "Loading banks…" : "Choose a bank…"}</option>
+                {banks.data?.banks.map((bank) => (
+                  <option key={bank.provider_id} value={bank.provider_id}>
+                    {bank.name}
+                    {connectedIds.has(bank.provider_id) ? " (connected)" : ""}
+                  </option>
+                ))}
+              </select>
+              {bankId &&
+                (link ? (
+                  <a
+                    className="btn btn-primary"
+                    href={link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      setOpened(true);
+                      // That address is now used; have a fresh one ready for a retry.
+                      window.setTimeout(() => setLinkVersion((v) => v + 1), 500);
+                    }}
+                  >
+                    1. Approve at {bankName}
+                  </a>
+                ) : (
+                  <span className="muted tiny">{linkError ?? "Preparing…"}</span>
+                ))}
+            </div>
+
+            {bankId && (
+              <form className="row" onSubmit={finish}>
+                <input
+                  placeholder="2. Paste the code TrueLayer shows"
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  style={{ minWidth: 280 }}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button className="btn btn-primary" disabled={busy || !code.trim()}>
+                  {busy ? "Connecting…" : "3. Finish"}
+                </button>
+              </form>
+            )}
+            {opened && (
+              <div className="muted tiny">
+                After you approve, TrueLayer opens a page showing a code. Copy it, or the page's whole address, into
+                the box above within 5 minutes. The first read fetches as much history as the bank allows.
+              </div>
+            )}
+            {result && <div className="banner error">{result}</div>}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

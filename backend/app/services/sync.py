@@ -11,13 +11,17 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Account, CategoryRule, Connection, SyncLog, Transaction
 from ..providers import ProviderError, RawAccount, RawTransaction
-from ..providers import starling, trading212
+from ..providers import starling, trading212, truelayer
 from .categorise import categorise, display_merchant, normalise_merchant
 from .transfers import detect_transfers
 
 DEFAULT_LOOKBACK_DAYS = 730
 # Re-pull a few days behind the newest row: banks tweak pending rows after the fact.
 OVERLAP_DAYS = 7
+# UK banks allow four refreshes a day per account when you're not present.
+# The schedule uses three, leaving one for a Sync you press yourself (which
+# also counts unless a proxy passes on your public IP).
+TRUELAYER_UNATTENDED_GAP = dt.timedelta(hours=8)
 
 # One sync at a time. The schedule and the Sync button can otherwise overlap and
 # both try to insert the same new transactions.
@@ -211,13 +215,148 @@ def sync_trading212(db: Session) -> dict:
         return {"provider": "trading212", "error": str(exc)}
 
 
-def sync_all(db: Session) -> dict:
+def truelayer_connections(db: Session) -> list[Connection]:
+    return list(
+        db.scalars(select(Connection).where(Connection.provider == "truelayer").order_by(Connection.created_at))
+    )
+
+
+def _attempted_within(connection: Connection, gap: dt.timedelta) -> bool:
+    last = (connection.meta or {}).get("last_attempt_at")
+    if not last:
+        return False
+    try:
+        when = dt.datetime.fromisoformat(last)
+    except ValueError:
+        return False
+    return _now() - when < gap
+
+
+def sync_truelayer(
+    db: Session,
+    connection: Connection,
+    *,
+    psu_ip: str | None = None,
+    tokens: truelayer.Tokens | None = None,
+) -> dict:
+    """One bank connected through TrueLayer. `tokens` are passed straight after
+    connecting, so the first read happens while the bank still releases full
+    history."""
+    name = connection.institution_name
+    base = {"provider": "truelayer", "connection_id": connection.id, "institution": name}
+    entry = _log(db, "truelayer", connection)
+    meta = dict(connection.meta or {})
+    meta["last_attempt_at"] = _now().isoformat()
+    connection.meta = meta
+    db.commit()
+    try:
+        if tokens is None:
+            if not connection.secret:
+                raise truelayer.ConsentExpired("No access is stored for this bank. Connect it again.")
+            tokens = truelayer.refresh(connection.secret)
+        if tokens.refresh_token and tokens.refresh_token != connection.secret:
+            # Keep a rotated token straight away, even if the rest of the sync fails.
+            connection.secret = tokens.refresh_token
+            db.commit()
+
+        scopes = meta.get("scopes") or list(truelayer.WANTED_SCOPES)
+        raw_accounts = truelayer.fetch_accounts(tokens.access_token, scopes, psu_ip, bank_name=name)
+        added = 0
+        for raw in raw_accounts:
+            account = upsert_account(db, "truelayer", raw, connection)
+            txns = truelayer.fetch_transactions(tokens.access_token, raw, _since_for(db, account), psu_ip)
+            added += upsert_transactions(db, account, txns)
+        connection.status = "linked"
+        connection.last_synced_at = _now()
+        connection.last_error = None
+        db.commit()
+        _finish(db, entry, "ok", accounts=len(raw_accounts), added=added)
+        return {**base, "accounts": len(raw_accounts), "transactions_added": added}
+    except truelayer.RateLimited as exc:
+        # Not a fault: the bank's daily allowance ran out. The next sync catches up.
+        connection.last_error = str(exc)
+        db.commit()
+        _finish(db, entry, "ok", message=str(exc))
+        return {**base, "skipped": str(exc)}
+    except truelayer.ConsentExpired as exc:
+        connection.status = "expired"
+        connection.last_error = str(exc)
+        db.commit()
+        _finish(db, entry, "error", message=str(exc))
+        return {**base, "error": f"{name}: {exc}"}
+    except ProviderError as exc:
+        connection.status = "error"
+        connection.last_error = str(exc)
+        db.commit()
+        _finish(db, entry, "error", message=str(exc))
+        return {**base, "error": f"{name}: {exc}"}
+
+
+def connect_truelayer(db: Session, code: str, *, psu_ip: str | None = None) -> dict:
+    """Finish connecting a bank: swap the pasted code for tokens and read it.
+
+    Connecting a bank that's already here (every 90 days) updates that
+    connection, and its accounts are matched by account number, so nothing is
+    duplicated."""
+    tokens = truelayer.exchange_code(truelayer.parse_code(code))
+    info = truelayer.connection_info(tokens.access_token, psu_ip)
+    connection = next(
+        (c for c in truelayer_connections(db) if (c.meta or {}).get("provider_id") == info.provider_id),
+        None,
+    )
+    if connection is None:
+        connection = Connection(provider="truelayer", institution_name=info.provider_name, status="pending")
+        db.add(connection)
+    connection.institution_name = info.provider_name
+    connection.secret = tokens.refresh_token
+    connection.expires_at = info.consent_expires_at
+    connection.meta = {
+        **(connection.meta or {}),
+        "provider_id": info.provider_id,
+        "scopes": info.scopes,
+        "credentials_id": info.credentials_id,
+    }
+    db.commit()
+
+    with SYNC_LOCK:
+        result = sync_truelayer(db, connection, psu_ip=psu_ip, tokens=tokens)
+        detect_transfers(db)
+        from ..analytics.networth import snapshot_networth  # local import avoids a cycle
+
+        snapshot_networth(db)
+    return result
+
+
+def disconnect_truelayer(connection: Connection) -> None:
+    """Ask TrueLayer to drop its access to the bank, then forget the token."""
+    if connection.secret and settings.truelayer_configured:
+        try:
+            tokens = truelayer.refresh(connection.secret)
+        except ProviderError:
+            tokens = None  # already expired or revoked: nothing to drop
+        if tokens is not None:
+            truelayer.delete_credential(tokens.access_token)
+    connection.secret = None
+
+
+def sync_all(db: Session, *, unattended: bool = False, psu_ip: str | None = None) -> dict:
+    """`unattended` is the schedule: TrueLayer banks are then read at most
+    every TRUELAYER_UNATTENDED_GAP, to stay inside the banks' daily limit."""
     with SYNC_LOCK:
         results = []
         if settings.starling_configured:
             results.append(sync_starling(db))
         if settings.trading212_configured:
             results.append(sync_trading212(db))
+        if settings.truelayer_configured:
+            for connection in truelayer_connections(db):
+                # An expired bank waits for you to connect it again; reporting
+                # it as a failure would make the schedule retry everything.
+                if connection.status == "expired":
+                    continue
+                if unattended and _attempted_within(connection, TRUELAYER_UNATTENDED_GAP):
+                    continue
+                results.append(sync_truelayer(db, connection, psu_ip=psu_ip))
 
         pairs = detect_transfers(db)
         from ..analytics.networth import snapshot_networth  # local import avoids a cycle

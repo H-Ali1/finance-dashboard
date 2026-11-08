@@ -270,6 +270,17 @@ export interface Connection {
   last_synced_at: string | null;
   last_error: string | null;
   account_count: number;
+  /** TrueLayer banks: when the 90 days of access end. */
+  expires_at: string | null;
+  /** TrueLayer banks: TrueLayer's id for the bank, e.g. ob-hsbc. */
+  bank_id: string | null;
+}
+
+export interface TrueLayerBank {
+  provider_id: string;
+  name: string;
+  logo_url: string | null;
+  scopes: string[];
 }
 
 export interface ConnectionsResponse {

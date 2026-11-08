@@ -46,5 +46,7 @@ schema:
   trading212_api_key_2: password?
   trading212_api_secret_2: password?
   trading212_base_url: url?
+  truelayer_client_id: str?
+  truelayer_client_secret: password?
   sync_interval_hours: float(0,24)
   essential_categories: str?

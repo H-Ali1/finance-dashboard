@@ -52,6 +52,28 @@ def test_unversioned_database_is_adopted_and_backed_up_first(tmp_path):
     assert len(saved) == 1 and backup.check(saved[0]) is None
 
 
+def test_version_1_database_gains_the_bank_link_columns(tmp_path):
+    """A database from 1.1.x, whose connections table predates TrueLayer."""
+    db = tmp_path / "v1" / "finance.db"
+    db.parent.mkdir()
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE connections (id INTEGER PRIMARY KEY, provider VARCHAR(32), institution_name VARCHAR(128), "
+        "status VARCHAR(32), last_synced_at DATETIME, last_error TEXT, created_at DATETIME)"
+    )
+    conn.execute("INSERT INTO connections (provider, institution_name, status) VALUES ('starling', 'Starling', 'linked')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    engine = _engine(db)
+    assert migrations.migrate(engine) == migrations.LATEST
+    columns = {c["name"] for c in inspect(engine).get_columns("connections")}
+    assert {"secret", "expires_at", "meta"} <= columns
+    with engine.connect() as check:
+        assert check.exec_driver_sql("SELECT provider FROM connections").scalar() == "starling"
+
+
 def test_database_from_a_newer_build_is_refused(tmp_path):
     engine = _engine(tmp_path / "future.db")
     with engine.begin() as conn:
@@ -103,7 +125,7 @@ def test_damaged_database_without_backup_starts_empty_but_keeps_the_file(tmp_pat
 
 # --- scheduler ----------------------------------------------------------------
 def test_failed_sync_retries_sooner_with_backoff(seeded, monkeypatch):
-    def broken(_db):
+    def broken(_db, **_kwargs):
         raise RuntimeError("provider unreachable")
 
     monkeypatch.setattr(settings, "sync_interval_hours", 6)
@@ -121,7 +143,7 @@ def test_failed_sync_retries_sooner_with_backoff(seeded, monkeypatch):
 
 def test_retry_never_waits_longer_than_the_normal_interval(seeded, monkeypatch):
     monkeypatch.setattr(settings, "sync_interval_hours", 1)
-    monkeypatch.setattr(scheduler.sync_service, "sync_all", lambda _db: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr(scheduler.sync_service, "sync_all", lambda _db, **_kwargs: (_ for _ in ()).throw(OSError("down")))
     monkeypatch.setitem(scheduler._state, "consecutive_failures", 10)
     before = dt.datetime.now(dt.timezone.utc)
     scheduler.run_sync()

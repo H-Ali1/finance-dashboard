@@ -26,11 +26,22 @@ configuration:
     description: >-
       Leave blank for your live account. Use https://demo.trading212.com/api/v0
       to try a practice account.
+  truelayer_client_id:
+    name: TrueLayer client ID
+    description: >-
+      For HSBC, Amex and other UK banks. From console.truelayer.com, with the
+      app switched to Live (the ID doesn't start with sandbox-). Banks are then
+      connected on the dashboard's Connections tab.
+  truelayer_client_secret:
+    name: TrueLayer client secret
+    description: Shown in TrueLayer Console next to the client ID.
   sync_interval_hours:
     name: Sync every (hours)
     description: >-
-      How often to pull from Starling and Trading 212 and record the day's net
-      worth. 0 turns automatic syncing off; the Sync button still works.
+      How often to pull from Starling, Trading 212 and TrueLayer banks and
+      record the day's net worth. TrueLayer banks are read at most every 8
+      hours, to stay inside the banks' daily limit. 0 turns automatic syncing
+      off; the Sync button still works.
   essential_categories:
     name: Essential categories
     description: >-

@@ -1,9 +1,10 @@
 # Finance Dashboard
 
 A local budgeting and net-worth dashboard for UK personal finances. It pulls
-transactions from Starling, imports statements from HSBC, Chase, Amex and any
-other bank, values your Trading 212 account, tracks manual assets like the car
-and your pension, and tells you what's worth fixing.
+transactions from Starling, from HSBC, Amex and other UK banks through
+TrueLayer, and from statement files for anything else (Chase). It values your
+Trading 212 account, tracks manual assets like the car and your pension, and
+tells you what's worth fixing.
 
 Everything runs on your machine. The database is a SQLite file in `backend/`,
 credentials live in `backend/.env`, and the only outbound network calls are to
@@ -11,8 +12,9 @@ the bank APIs you configure yourself.
 
 ## What it does
 
-- **Connects to your money.** Starling directly, Trading 212 for investments,
-  and a CSV statement importer for HSBC, Chase, Amex and anything else.
+- **Connects to your money.** Starling directly, HSBC, Amex and other UK
+  banks through TrueLayer, Trading 212 for investments, and a CSV statement
+  importer for anything else.
 - **Categorises automatically** using merchant keywords, card MCC codes and the
   provider's own labels — with your own rules taking precedence.
 - **Detects internal transfers**, so paying the Amex off from your current
@@ -69,21 +71,53 @@ you want. Restart the backend after editing it, then use the **Connections** tab
 
 Savings spaces come through as separate accounts so they count toward net worth.
 
-### HSBC, Chase and Amex — statement imports for now
+### HSBC, Amex and other UK banks — TrueLayer
 
-None of these offers a personal API, and live Open Banking access needs an
-aggregator in between. Until one is chosen, export a CSV from each bank and use
-the statement importer below. Everything downstream (categories, budgets,
-subscriptions, net worth) works the same as for a live feed.
+None of these offers a personal API, so they're read through TrueLayer, an
+open banking provider. TrueLayer only signs contracts with businesses, but an
+app switched to Live in its Console still connects real banks, with a "test
+mode" notice on the approval screen. TrueLayer doesn't support that use and
+could end it at any time. Your transactions pass through TrueLayer on the way.
 
-- **HSBC:** online banking → the account → **Search and filter** → set the date
-  range → **Download** → CSV. Only the transaction list downloads as CSV; PDF
-  statements don't.
-- **Amex:** online account → **Statements & Activity** → pick the period →
-  **Download** → CSV. Create the account as a **Credit card**.
-- **Chase UK:** look in the app for an export or download option for
-  transactions. If it only offers PDF statements, Chase has to wait for a live
-  connection; the importer reads CSV only.
+1. Sign up at [console.truelayer.com](https://console.truelayer.com) and switch
+   the app to **Live** (the client ID doesn't start with `sandbox-`).
+2. Add `https://console.truelayer.com/redirect-page` to its **Allowed redirect
+   URIs**. TrueLayer's page shows the code you paste back, so the dashboard
+   never has to be reachable from the internet.
+3. Set `TRUELAYER_CLIENT_ID` and `TRUELAYER_CLIENT_SECRET` (in Home Assistant:
+   the App's Configuration tab).
+4. **Connections** tab → choose a bank → **Approve at** *your bank* → approve
+   on the bank's screen → paste the code → **Finish**, within 5 minutes.
+
+- **One connection per bank.** It holds TrueLayer's refresh token for that
+  bank, in the database. The access token is never stored, and nothing is sent
+  to the browser.
+- **History.** The first read asks for two years. Many banks release more than
+  90 days only in the minutes after you approve; one that refuses is asked for
+  a year, then 89 days.
+- **90 days.** Access then ends. **Needs fixing** warns you 10 days before.
+  **Connect again** reuses the same accounts: they're matched by a hash of the
+  account number, and transactions by TrueLayer's stable ID, so nothing
+  doubles.
+- **Four refreshes a day.** UK banks allow four refreshes a day when you're
+  not present. The schedule reads each TrueLayer bank at most every 8 hours,
+  leaving one for the **Sync** button. A sync you start yourself passes your
+  public IP when a proxy provides one, which lifts the limit. If the limit is
+  hit anyway, the bank is skipped until the next sync, not marked broken.
+- **Chase UK** isn't on TrueLayer's list. Use statement imports for it.
+
+### Chase — statement imports
+
+Export a CSV and use the statement importer below. Everything downstream
+(categories, budgets, subscriptions, net worth) works the same as for a live
+feed.
+
+- **Chase UK:** in the app, profile → **Statements** → create a statement for
+  up to 90 days → CSV.
+- **HSBC** and **Amex** can be imported the same way if you'd rather not use
+  TrueLayer. HSBC: online banking → the account → **Search and filter** →
+  **Download** → CSV. Amex: **Statements & Activity** → **Download** → CSV,
+  into an account created as a **Credit card**.
 
 ### Trading 212
 
@@ -258,7 +292,7 @@ that's expected.
 ```
 backend/
   app/
-    providers/    starling, trading212, csv_import — normalise to RawAccount/RawTransaction
+    providers/    starling, trading212, truelayer, csv_import — normalise to RawAccount/RawTransaction
     services/     categorise, transfers, sync, scheduler (background jobs), backup (copies + recovery)
     migrations.py versioned schema changes
     analytics/    spending, recurring, cashflow, anomalies, networth, insights
@@ -277,12 +311,14 @@ docker-compose.yml  restart policy + health check for running outside HA
 
 ## Privacy
 
-Bank data never leaves your machine. There is no telemetry, no cloud sync and no
-third-party analytics. The app has no login of its own. Locally the backend binds
+The dashboard sends nothing anywhere except requests to the providers you
+configure. Starling and Trading 212 are read directly. Banks read through
+TrueLayer pass through TrueLayer on the way, as with any open banking app.
+There is no telemetry, no cloud sync and no third-party analytics. The app has no login of its own. Locally the backend binds
 to localhost. On Home Assistant it only accepts connections from HA's ingress
 proxy, so HA's login protects it. Anywhere else, put it behind something that
 requires authentication.
 
 `.env` and `*.db` are gitignored. Revoke tokens from the provider's own app or
-dashboard — deleting a connection here does not revoke a Starling or Trading 212
-key.
+dashboard: deleting a connection here does not revoke a Starling or Trading 212
+key. Disconnecting a TrueLayer bank here does ask TrueLayer to drop its access.

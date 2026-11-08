@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     trading212_api_secret_2: str = ""
     trading212_base_url: str = "https://live.trading212.com/api/v0"
 
+    # --- TrueLayer (console.truelayer.com, app switched to Live) -------------
+    # Reads HSBC, Amex and other UK banks through open banking. Each bank you
+    # connect is approved on the bank's own screen; the dashboard stores only
+    # TrueLayer's refresh token for it, in the database.
+    truelayer_client_id: str = ""
+    truelayer_client_secret: str = ""
+    # Must be listed under Allowed redirect URIs in TrueLayer Console. The
+    # default is TrueLayer's own page, which shows the code to paste back here,
+    # so the dashboard never has to be reachable from the internet.
+    truelayer_redirect_uri: str = "https://console.truelayer.com/redirect-page"
+    truelayer_auth_url: str = "https://auth.truelayer.com"
+    truelayer_api_url: str = "https://api.truelayer.com"
+
     # --- app ---------------------------------------------------------------
     frontend_origin: str = "http://localhost:5173"
     # Built UI to serve from the API process. Missing in development, where
@@ -79,6 +92,10 @@ class Settings(BaseSettings):
     @property
     def trading212_configured(self) -> bool:
         return bool(self.trading212_api_key.strip() or self.trading212_api_key_2.strip())
+
+    @property
+    def truelayer_configured(self) -> bool:
+        return bool(self.truelayer_client_id.strip() and self.truelayer_client_secret.strip())
 
 
 def _app_options() -> dict:

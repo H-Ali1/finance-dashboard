@@ -69,7 +69,7 @@ def run_sync() -> bool:
     """One scheduled sync. Returns True when every provider synced cleanly."""
     db = SessionLocal()
     try:
-        result = sync_service.sync_all(db)
+        result = sync_service.sync_all(db, unattended=True)
         errors = [e.get("error") for e in result["errors"]]
         ok = not errors
         _state["last_error"] = "; ".join(errors) if errors else None

@@ -409,9 +409,47 @@ def _anomaly_rules(db: Session) -> list[dict]:
     return out
 
 
+def _consent_rules(connection: Connection) -> list[dict]:
+    """TrueLayer banks share data for 90 days, then need connecting again."""
+    name = connection.institution_name
+    expires = connection.expires_at
+    if expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=dt.timezone.utc)
+    stamp = expires.date().isoformat() if expires else "unknown"
+    reconnect = "Connect it again on the Connections tab. It takes a minute, and nothing is duplicated."
+    if connection.status == "expired":
+        return [
+            _insight(
+                f"connection:expired:{connection.id}:{stamp}",
+                "warning",
+                f"{name} needs connecting again",
+                "Its 90 days of access through TrueLayer have ended, so new transactions aren't coming in.",
+                action=reconnect,
+                area="connections",
+            )
+        ]
+    if expires is None:
+        return []
+    days_left = (expires - dt.datetime.now(dt.timezone.utc)).days
+    if days_left > 10:
+        return []
+    return [
+        _insight(
+            f"connection:expiring:{connection.id}:{stamp}",
+            "warning" if days_left <= 3 else "info",
+            f"{name} stops syncing in {max(days_left, 0)} day{'s' if days_left != 1 else ''}",
+            f"Its 90 days of access through TrueLayer end on {expires.strftime('%d %b')}.",
+            action=reconnect,
+            area="connections",
+        )
+    ]
+
+
 def _hygiene_rules(db: Session) -> list[dict]:
     out = []
     for connection in db.scalars(select(Connection)):
+        if connection.provider == "truelayer":
+            out.extend(_consent_rules(connection))
         if connection.status == "error":
             out.append(
                 _insight(

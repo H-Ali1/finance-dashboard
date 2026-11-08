@@ -99,6 +99,7 @@ async def only_allowed_clients(request: Request, call_next):
 
 
 app.include_router(connections.router)
+app.include_router(connections.truelayer_router)
 app.include_router(accounts.router)
 app.include_router(transactions.router)
 app.include_router(analytics.router)
@@ -128,6 +129,7 @@ def health(db: Session = Depends(get_db)):
         "providers_configured": {
             "starling": settings.starling_configured,
             "trading212": settings.trading212_configured,
+            "truelayer": settings.truelayer_configured,
         },
         "base_currency": settings.base_currency,
         "schema_version": SCHEMA_VERSION,
@@ -137,9 +139,9 @@ def health(db: Session = Depends(get_db)):
 
 
 @app.post("/api/sync")
-def sync_everything(db: Session = Depends(get_db)) -> dict:
+def sync_everything(request: Request, db: Session = Depends(get_db)) -> dict:
     """Pull from every configured provider, then rebuild transfers + net worth."""
-    return sync_service.sync_all(db)
+    return sync_service.sync_all(db, psu_ip=connections.psu_ip(request))
 
 
 # --- the built UI ------------------------------------------------------------

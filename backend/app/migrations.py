@@ -35,8 +35,24 @@ def _v1_baseline(conn: Connection) -> None:
     Base.metadata.create_all(conn)
 
 
+def _v2_connection_credentials(conn: Connection) -> None:
+    """Per-bank links (TrueLayer) keep a token, an expiry and some details.
+
+    Only adds what's missing: a database created by this build's baseline
+    already has the columns."""
+    existing = {col["name"] for col in inspect(conn).get_columns("connections")}
+    for name, ddl in (
+        ("secret", "TEXT"),
+        ("expires_at", "DATETIME"),
+        ("meta", "JSON"),
+    ):
+        if name not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE connections ADD COLUMN {name} {ddl}")
+
+
 STEPS: list[Callable[[Connection], None]] = [
     _v1_baseline,
+    _v2_connection_credentials,
 ]
 LATEST = len(STEPS)
 
