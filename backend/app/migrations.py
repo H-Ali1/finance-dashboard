@@ -100,4 +100,3 @@ def migrate(engine: Engine) -> int:
 def _v1_baseline_on(engine: Engine) -> None:
     with engine.begin() as conn:
         _v1_baseline(conn)
-

@@ -252,13 +252,13 @@ def _get(client: httpx.Client, token: str, path: str, psu_ip: str | None = None,
 
     code = _error_code(resp)
     if code == "access_denied":
-        raise ConsentExpired("The bank has stopped sharing data (90 days passed, or access was revoked). Connect it again.")
+        raise ConsentExpired(
+            "The bank has stopped sharing data (90 days passed, or access was revoked). Connect it again."
+        )
     if code in ("sca_exceeded", "invalid_date_range"):
         raise HistoryRefused(f"TrueLayer {path}: {_error_text(resp)}")
     if resp.status_code == 429:
-        raise RateLimited(
-            "The bank only allows a few automatic refreshes a day. It'll catch up at the next sync."
-        )
+        raise RateLimited("The bank only allows a few automatic refreshes a day. It'll catch up at the next sync.")
     if resp.status_code == 501 or code == "endpoint_not_supported":
         raise NotSupported(f"TrueLayer {path}: not offered by this bank")
     raise ProviderError(f"TrueLayer {path} failed: {_error_text(resp)}")
@@ -300,7 +300,9 @@ def _first(results: list[dict]) -> dict:
     return results[0] if results else {}
 
 
-def fetch_accounts(access_token: str, scopes: list[str], psu_ip: str | None = None, bank_name: str = "") -> list[RawAccount]:
+def fetch_accounts(
+    access_token: str, scopes: list[str], psu_ip: str | None = None, bank_name: str = ""
+) -> list[RawAccount]:
     out: list[RawAccount] = []
     with _client() as client:
         if "accounts" in scopes:
@@ -318,7 +320,9 @@ def _raw_account(acc: dict, balance: dict, bank_name: str) -> RawAccount:
     provider_id = (acc.get("provider") or {}).get("provider_id") or ""
     number = acc.get("account_number") or {}
     sort_code = (number.get("sort_code") or "").replace("-", "")
-    stable = _stable_id(provider_id, sort_code + (number.get("number") or "") or number.get("iban") or acc["account_id"])
+    stable = _stable_id(
+        provider_id, sort_code + (number.get("number") or "") or number.get("iban") or acc["account_id"]
+    )
     available = balance.get("available")
     return RawAccount(
         external_id=stable,
@@ -354,7 +358,9 @@ def _raw_card(card: dict, balance: dict, bank_name: str) -> RawAccount:
 def fetch_transactions(
     access_token: str, account: RawAccount | dict, since: dt.date, psu_ip: str | None = None
 ) -> list[RawTransaction]:
-    meta = account.meta if isinstance(account, RawAccount) else (account.get("provider_meta") or account.get("meta") or {})
+    meta = (
+        account.meta if isinstance(account, RawAccount) else (account.get("provider_meta") or account.get("meta") or {})
+    )
     kind, tl_id = meta.get("truelayer_kind"), meta.get("truelayer_id")
     if kind not in ("accounts", "cards") or not tl_id:
         raise ProviderError("This account has no TrueLayer ID stored; connect the bank again")
@@ -387,7 +393,9 @@ def _raw_transaction(row: dict, *, is_card: bool) -> RawTransaction:
     when = _parse_ts(row.get("timestamp"))
     description = (row.get("description") or "").strip()
     meta = row.get("meta") or {}
-    merchant = row.get("merchant_name") or meta.get("provider_merchant_name") or meta.get("counter_party_preferred_name") or ""
+    merchant = (
+        row.get("merchant_name") or meta.get("provider_merchant_name") or meta.get("counter_party_preferred_name") or ""
+    )
     ident = row.get("normalised_provider_transaction_id") or row.get("provider_transaction_id") or row["transaction_id"]
     return RawTransaction(
         external_id=f"tl:{ident}",

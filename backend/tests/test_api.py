@@ -56,9 +56,7 @@ def test_sync_with_nothing_configured_is_clean(client):
 
 
 def test_statement_import_generic_layout(client):
-    created = client.post(
-        "/api/accounts/manual", data={"name": "Test import account", "kind": "current"}
-    ).json()
+    created = client.post("/api/accounts/manual", data={"name": "Test import account", "kind": "current"}).json()
     csv = (
         "Transaction Date,Transaction Description,Debit Amount,Credit Amount\n"
         "03/11/2026,TESCO STORES 9999,12.34,\n"

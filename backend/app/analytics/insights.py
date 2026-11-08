@@ -103,7 +103,9 @@ def _cashflow_rules(flow: dict, nw: dict) -> list[dict]:
                     f"You keep about £{flow['typical_income'] - flow['typical_spend']:,.0f} of "
                     f"£{flow['typical_income']:,.0f} a month. Getting to 20% would mean finding "
                     f"£{flow['typical_income'] * 0.2 - (flow['typical_income'] - flow['typical_spend']):,.0f} a month.",
-                    impact=round((flow["typical_income"] * 0.2 - (flow["typical_income"] - flow["typical_spend"])) * 12, 2),
+                    impact=round(
+                        (flow["typical_income"] * 0.2 - (flow["typical_income"] - flow["typical_spend"])) * 12, 2
+                    ),
                     area="cashflow",
                 )
             )
@@ -172,7 +174,8 @@ def _budget_rules(budgets: dict) -> list[dict]:
                 _insight(
                     f"budget:blown:{row['category']}:{budgets['month']}",
                     "warning",
-                    f"{row['category']} is over budget with {budgets['days_in_month'] - budgets['days_elapsed']} days left",
+                    f"{row['category']} is over budget with "
+                    f"{budgets['days_in_month'] - budgets['days_elapsed']} days left",
                     f"£{row['spent']:,.0f} spent against a £{row['limit']:,.0f} limit.",
                     impact=round(row["spent"] - row["limit"], 2),
                     impact_period="month",
@@ -226,8 +229,7 @@ def _trend_rules(trends: dict) -> list[dict]:
                     f"trend:up:{row['category']}:{trends['current_month']}",
                     "warning",
                     f"{row['category']} is up {pct:.0f}% on your recent average",
-                    f"£{row['current']:,.0f} this month vs £{row['average']:,.0f} typical — "
-                    f"£{change:,.0f} more.",
+                    f"£{row['current']:,.0f} this month vs £{row['average']:,.0f} typical — £{change:,.0f} more.",
                     impact=round(change * 12, 2),
                     area="trend",
                 )
@@ -336,9 +338,7 @@ def _debt_and_fee_rules(db: Session, nw: dict, flow: dict) -> list[dict]:
 
     since = dt.date.today() - dt.timedelta(days=90)
     fees = sum(
-        -t.amount_minor
-        for t in load_transactions(db, start=since)
-        if is_spend(t) and t.category == "Fees & Interest"
+        -t.amount_minor for t in load_transactions(db, start=since) if is_spend(t) and t.category == "Fees & Interest"
     )
     if fees > 2500:  # £25 over three months
         out.append(

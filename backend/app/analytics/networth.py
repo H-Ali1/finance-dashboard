@@ -58,9 +58,7 @@ def compute_networth(db: Session) -> dict:
     assets_minor = sum(e["value_minor"] for e in assets)
     liabilities_minor = sum(e["value_minor"] for e in liabilities)
 
-    liquid_minor = sum(
-        a.balance_minor for a in accounts if a.kind in LIQUID_KINDS and a.balance_minor > 0
-    )
+    liquid_minor = sum(a.balance_minor for a in accounts if a.kind in LIQUID_KINDS and a.balance_minor > 0)
     investments_minor = sum(a.balance_minor for a in accounts if a.kind == "investment")
     pension_minor = sum(m.value_minor for m in manual if m.category == "pension" and m.kind == "asset")
     card_debt_minor = sum(abs(a.balance_minor) for a in accounts if a.kind == "credit_card")
@@ -112,9 +110,7 @@ def networth_history(db: Session, days: int = 365) -> dict:
     since = dt.date.today() - dt.timedelta(days=days)
     rows = list(
         db.scalars(
-            select(NetWorthSnapshot)
-            .where(NetWorthSnapshot.taken_on >= since)
-            .order_by(NetWorthSnapshot.taken_on)
+            select(NetWorthSnapshot).where(NetWorthSnapshot.taken_on >= since).order_by(NetWorthSnapshot.taken_on)
         )
     )
     series = [

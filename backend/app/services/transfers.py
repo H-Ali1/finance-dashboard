@@ -24,11 +24,7 @@ MIN_MINOR = 500
 
 def detect_transfers(db: Session, since: dt.date | None = None) -> int:
     since = since or dt.date.today() - dt.timedelta(days=400)
-    rows = list(
-        db.scalars(
-            select(Transaction).where(Transaction.booked_on >= since).order_by(Transaction.booked_on)
-        )
-    )
+    rows = list(db.scalars(select(Transaction).where(Transaction.booked_on >= since).order_by(Transaction.booked_on)))
 
     credits_by_amount: dict[int, list[Transaction]] = defaultdict(list)
     for txn in rows:

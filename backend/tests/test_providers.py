@@ -19,7 +19,12 @@ SUMMARY = {
     "currency": "GBP",
     "totalValue": 15234.56,
     "cash": {"availableToTrade": 120.5, "inPies": 0, "reservedForOrders": 0},
-    "investments": {"currentValue": 15114.06, "totalCost": 12000.0, "unrealizedProfitLoss": 3114.06, "realizedProfitLoss": 250.0},
+    "investments": {
+        "currentValue": 15114.06,
+        "totalCost": 12000.0,
+        "unrealizedProfitLoss": 3114.06,
+        "realizedProfitLoss": 250.0,
+    },
 }
 POSITIONS = [
     {
@@ -27,14 +32,24 @@ POSITIONS = [
         "quantity": 10.0,
         "averagePricePaid": 150.0,
         "currentPrice": 230.0,
-        "walletImpact": {"currency": "GBP", "currentValue": 1810.12, "totalCost": 1200.0, "unrealizedProfitLoss": 610.12},
+        "walletImpact": {
+            "currency": "GBP",
+            "currentValue": 1810.12,
+            "totalCost": 1200.0,
+            "unrealizedProfitLoss": 610.12,
+        },
     },
     {
         "instrument": {"ticker": "VUAGl_EQ", "name": "Vanguard S&P 500 (Acc)", "currency": "GBP"},
         "quantity": 120.5,
         "averagePricePaid": 80.0,
         "currentPrice": 111.4,
-        "walletImpact": {"currency": "GBP", "currentValue": 13303.94, "totalCost": 10800.0, "unrealizedProfitLoss": 2503.94},
+        "walletImpact": {
+            "currency": "GBP",
+            "currentValue": 13303.94,
+            "totalCost": 10800.0,
+            "unrealizedProfitLoss": 2503.94,
+        },
     },
 ]
 
@@ -72,7 +87,12 @@ def test_trading212_uses_key_and_secret_and_new_endpoints(t212_api, monkeypatch)
     assert top["name"] == "Vanguard S&P 500 (Acc)"  # sorted by value
     apple = account.meta["holdings"][1]
     # Value and P/L in pounds from the API, the price left in dollars.
-    assert (apple["value"], apple["ppl"], apple["current_price"], apple["price_currency"]) == (1810.12, 610.12, 230.0, "USD")
+    assert (apple["value"], apple["ppl"], apple["current_price"], apple["price_currency"]) == (
+        1810.12,
+        610.12,
+        230.0,
+        "USD",
+    )
 
 
 def test_trading212_key_without_secret_uses_the_legacy_header(t212_api, monkeypatch):
@@ -94,7 +114,8 @@ def test_trading212_two_accounts(t212_api, monkeypatch):
 
 def test_trading212_bad_credentials_explain_themselves(monkeypatch):
     monkeypatch.setattr(
-        trading212.httpx, "get",
+        trading212.httpx,
+        "get",
         lambda url, headers=None, timeout=None: httpx.Response(401, request=httpx.Request("GET", url)),
     )
     with pytest.raises(ProviderError, match="newer keys also need their API secret"):
@@ -121,23 +142,34 @@ class FakeStarling:
         self.calls.append((lo, hi))
         request = httpx.Request("GET", "https://api.starlingbank.com" + path)
         if hi - lo > dt.timedelta(days=self.max_days) or lo < self.oldest:
-            return httpx.Response(400, json={"errors": [{"message": "QUERY_EXCEEDING_MAX_TIME_RANGE"}], "success": False}, request=request)
+            return httpx.Response(
+                400, json={"errors": [{"message": "QUERY_EXCEEDING_MAX_TIME_RANGE"}], "success": False}, request=request
+            )
         day = dt.datetime.combine(lo.date(), dt.time(12), tzinfo=dt.timezone.utc)
         items = []
         while day <= hi:  # edges are inclusive, so neighbouring windows overlap
             if day >= lo:
-                items.append({
-                    "feedItemUid": f"uid-{day.date()}", "status": "SETTLED", "direction": "OUT",
-                    "amount": {"currency": "GBP", "minorUnits": 100}, "transactionTime": day.isoformat(),
-                    "counterPartyName": "TESCO",
-                })
+                items.append(
+                    {
+                        "feedItemUid": f"uid-{day.date()}",
+                        "status": "SETTLED",
+                        "direction": "OUT",
+                        "amount": {"currency": "GBP", "minorUnits": 100},
+                        "transactionTime": day.isoformat(),
+                        "counterPartyName": "TESCO",
+                    }
+                )
             day += dt.timedelta(days=1)
         return httpx.Response(200, json={"feedItems": items}, request=request)
 
 
 STARLING_ACCOUNT = RawAccount(
-    external_id="acc-1", name="Personal", kind="current", currency="GBP",
-    balance_minor=0, meta={"default_category": "cat-1"},
+    external_id="acc-1",
+    name="Personal",
+    kind="current",
+    currency="GBP",
+    balance_minor=0,
+    meta={"default_category": "cat-1"},
 )
 
 
@@ -204,7 +236,11 @@ def test_headerless_file_with_a_balance_column_is_refused_clearly():
 
 
 def test_paid_in_paid_out_columns_and_pound_signs():
-    text = "Date,Description,Paid out,Paid in,Balance\n03/11/2026,TESCO,£12.34,,£987.66\n04/11/2026,SALARY,,\"£2,500.00\",£3487.66\n"
+    text = (
+        "Date,Description,Paid out,Paid in,Balance\n"
+        "03/11/2026,TESCO,£12.34,,£987.66\n"
+        '04/11/2026,SALARY,,"£2,500.00",£3487.66\n'
+    )
     assert [r.amount_minor for r in parse(text).rows] == [-1234, 250000]
 
 
@@ -227,7 +263,10 @@ def _import(client, account_id, text, **form):
 
 def test_card_statement_with_positive_purchases_is_flipped_for_card_accounts(client):
     card = _account(client, "Test card", "credit_card")
-    text = "Date,Description,Amount\n01/10/2026,SHOP A,25.00\n02/10/2026,SHOP B,40.00\n03/10/2026,PAYMENT THANK YOU,-65.00\n"
+    text = (
+        "Date,Description,Amount\n"
+        "01/10/2026,SHOP A,25.00\n02/10/2026,SHOP B,40.00\n03/10/2026,PAYMENT THANK YOU,-65.00\n"
+    )
     result = _import(client, card, text)
     assert result["signs_flipped"] is True
     assert (result["money_out"], result["money_in"]) == (65.0, 65.0)

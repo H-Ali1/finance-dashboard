@@ -1,0 +1,18 @@
+# Python lint and format rules. CI's Lint job runs `ruff check` and
+# `ruff format --check` with these; run the same locally before pushing.
+line-length = 120
+target-version = "py312"
+extend-exclude = ["frontend", "build"]
+
+[lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+# timezone.utc reads more plainly than datetime.UTC here.
+ignore = ["UP017"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[lint.flake8-bugbear]
+# FastAPI declares dependencies and form fields as default arguments.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.File", "fastapi.Form", "fastapi.Body"]

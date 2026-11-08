@@ -38,13 +38,24 @@ _AMEX_ONLY = {"cardmember", "appearsonyourstatementas", "extendeddetails"}
 # Every header name the generic mapping understands; a first row containing
 # none of them is treated as data, not headers.
 _DATE_HEADERS = ("transactiondate", "date", "datetime", "posteddate", "postingdate", "bookingdate")
-_DESC_HEADERS = ("transactiondescription", "description", "counterparty", "details", "narrative", "payee", "merchant", "name")
+_DESC_HEADERS = (
+    "transactiondescription",
+    "description",
+    "counterparty",
+    "details",
+    "narrative",
+    "payee",
+    "merchant",
+    "name",
+)
 _REF_HEADERS = ("reference", "extendeddetails", "notes", "memo")
 _AMOUNT_HEADERS = ("amount", "amountgbp", "value", "amount1", "transactionamount")
 _OUT_HEADERS = ("debitamount", "paidout", "moneyout", "debit", "withdrawals", "out")
 _IN_HEADERS = ("creditamount", "paidin", "moneyin", "credit", "deposits", "in")
 _CATEGORY_HEADERS = ("spendingcategory", "category")
-_KNOWN = set(_DATE_HEADERS + _DESC_HEADERS + _REF_HEADERS + _AMOUNT_HEADERS + _OUT_HEADERS + _IN_HEADERS + _CATEGORY_HEADERS)
+_KNOWN = set(
+    _DATE_HEADERS + _DESC_HEADERS + _REF_HEADERS + _AMOUNT_HEADERS + _OUT_HEADERS + _IN_HEADERS + _CATEGORY_HEADERS
+)
 
 
 @dataclass
@@ -138,7 +149,11 @@ def _headerless_columns(rows: list[list[str]]) -> tuple[int, int, list[int]]:
     if len(money_cols) != 1:
         raise ProviderError(
             "The file has no header row and "
-            + ("no column of amounts" if not money_cols else f"{len(money_cols)} columns of numbers (amount, balance, ...)")
+            + (
+                "no column of amounts"
+                if not money_cols
+                else f"{len(money_cols)} columns of numbers (amount, balance, ...)"
+            )
             + ". Add a first line naming the columns, e.g. Date,Description,Amount or "
             "Date,Description,Paid out,Paid in,Balance, and import it again."
         )
@@ -169,9 +184,7 @@ def parse_statement(content: bytes | str, *, flip_sign: bool = False) -> ParsedS
         category_i = _find(headers, _CATEGORY_HEADERS)
         desc_is = []
         if date_i is None or (amount_i is None and out_i is None and in_i is None):
-            raise ProviderError(
-                f"Could not find date and amount columns in: {', '.join(h for h in header_row if h)}"
-            )
+            raise ProviderError(f"Could not find date and amount columns in: {', '.join(h for h in header_row if h)}")
 
     # Amex exports purchases as positive numbers.
     flip = flip_sign or detected == "amex"
@@ -195,10 +208,7 @@ def parse_statement(content: bytes | str, *, flip_sign: bool = False) -> ParsedS
         if minor == 0:
             continue
 
-        if desc_is:
-            name = " ".join(cell(row, i) for i in desc_is if cell(row, i))
-        else:
-            name = cell(row, desc_i)
+        name = " ".join(cell(row, i) for i in desc_is if cell(row, i)) if desc_is else cell(row, desc_i)
         reference = cell(row, ref_i)
         description = " ".join(p for p in (name, reference) if p) or "Transaction"
 

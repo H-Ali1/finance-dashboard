@@ -28,10 +28,7 @@ def _month_totals(db: Session, months: int, fixed_keys: set[str]) -> dict[str, d
     keys = month_keys_back(months)
     start, _ = month_bounds(keys[0])
     txns = load_transactions(db, start=start)
-    totals = {
-        k: {"income": 0, "spend": 0, "essential": 0, "discretionary": 0, "fixed": 0, "variable": 0}
-        for k in keys
-    }
+    totals = {k: {"income": 0, "spend": 0, "essential": 0, "discretionary": 0, "fixed": 0, "variable": 0} for k in keys}
     essentials = set(settings.essential_category_list)
 
     for txn in txns:
@@ -87,17 +84,13 @@ def cashflow(db: Session, months: int = 12) -> dict:
     # daily rate — rent landing on the 1st shouldn't imply a rent every day.
     due = upcoming(recurring_items, days=remaining_days or 30)
     committed_minor = int(round(sum(i["amount"] for i in due) * 100))
-    projected_variable = project_month_total(
-        current["variable"], elapsed, total_days, avg_variable
-    )
+    projected_variable = project_month_total(current["variable"], elapsed, total_days, avg_variable)
     projected_spend = current["fixed"] + committed_minor + projected_variable
     daily_spend = current["spend"] / elapsed if elapsed else 0
 
     # Income this month is usually one salary — assume the rest of it has landed
     # if the typical payday has passed, otherwise expect the historical figure.
-    expected_income = max(
-        current["income"], typical_income if remaining_days > 0 else current["income"]
-    )
+    expected_income = max(current["income"], typical_income if remaining_days > 0 else current["income"])
 
     nw = compute_networth(db)
     liquid_minor = nw["_minor"]["liquid"]
@@ -130,12 +123,8 @@ def cashflow(db: Session, months: int = 12) -> dict:
         "typical_variable": to_major(avg_variable),
         "typical_fixed": to_major(typical_spend - avg_variable),
         "months_of_history": len(complete),
-        "savings_rate": round((typical_income - typical_spend) / typical_income * 100, 1)
-        if typical_income
-        else None,
-        "current_savings_rate": round(projected_net / expected_income * 100, 1)
-        if expected_income
-        else None,
+        "savings_rate": round((typical_income - typical_spend) / typical_income * 100, 1) if typical_income else None,
+        "current_savings_rate": round(projected_net / expected_income * 100, 1) if expected_income else None,
         "liquid": to_major(liquid_minor),
         "runway_months": runway_months,
         "history": [

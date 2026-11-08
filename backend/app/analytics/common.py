@@ -97,9 +97,7 @@ def pct_change(current: float, previous: float) -> float | None:
     return round((current - previous) / abs(previous) * 100, 1)
 
 
-def project_month_total(
-    spent_to_date: int, elapsed: int, total_days: int, historical_month_avg: int
-) -> int:
+def project_month_total(spent_to_date: int, elapsed: int, total_days: int, historical_month_avg: int) -> int:
     """Estimate a full month's total from a partial month.
 
     Naively scaling day-2 spending by 15 says you'll spend fifteen rents this
