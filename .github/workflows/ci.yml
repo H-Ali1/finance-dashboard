@@ -1,4 +1,6 @@
-# Every push and pull request: backend tests, frontend typecheck and build.
+# Every push and pull request: backend tests, frontend typecheck and build,
+# lint (ruff, ESLint) and a secret scan. On pull requests into main these are
+# the required checks: the PR merges itself once they pass (auto-merge.yml).
 #
 # Pushes to main that change the app also release it to Home Assistant:
 #   1. build the image for each architecture (amd64, and aarch64 for the HA Green)
@@ -63,9 +65,59 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Python (ruff)
+        run: |
+          # The version pinned in requirements-dev.txt, so CI and local agree.
+          pip install "$(grep -E '^ruff==' backend/requirements-dev.txt)"
+          ruff check --output-format=github .
+          ruff format --check .
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: TypeScript and React (ESLint)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every commit: a secret removed later is still in history
+      - name: No credential or data files
+        run: |
+          pattern='(^|/)\.env(\..+)?$|\.db(-wal|-shm|-journal)?$|(^|/)options\.json$|\.(pem|key|p12|pfx)$|(^|/)id_(rsa|ed25519)$'
+          found=$(git ls-files | grep -E "$pattern" | grep -vE '(^|/)\.env\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::These files hold secrets or personal data and must not be committed:"
+            echo "$found"
+            exit 1
+          fi
+      - name: Gitleaks
+        run: |
+          # Scans every commit for tokens, keys and passwords; prints findings redacted.
+          # Reviewed false positives are listed by fingerprint in .gitleaksignore.
+          # safe.directory: the checkout belongs to the runner's user, not the container's.
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 git . --redact --verbose --no-banner
+
   plan:
     name: Decide on a release
-    needs: [backend, frontend]
+    needs: [backend, frontend, lint, secrets]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     outputs:

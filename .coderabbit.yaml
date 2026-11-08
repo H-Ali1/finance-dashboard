@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit reviews every pull request into main. Its `CodeRabbit` commit
+# status is a required check, and unresolved review conversations block the
+# merge, so a PR only merges itself once CodeRabbit has finished reviewing and
+# its findings have been dealt with (fixed, or answered and resolved).
+language: en-GB
+
+reviews:
+  profile: chill
+  # Request changes for blocking findings; approve once they're resolved.
+  auto_approvals:
+    enabled: true
+  # The `CodeRabbit` status: pending while it reviews, green when it's done.
+  commit_status: true
+  # A review that breaks off with an error blocks the merge instead of
+  # letting it through unreviewed.
+  fail_commit_status: true
+  high_level_summary: true
+  poem: false
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!frontend/package-lock.json"
+    - "!**/dist/**"
+  path_instructions:
+    - path: "backend/app/providers/**"
+      instructions: >-
+        These modules talk to banks and brokers with the owner's credentials.
+        Flag any token, key, account number or transaction detail that could
+        reach a log line, an error message or an API response, and any request
+        that isn't read-only.
+    - path: "backend/app/**/*.py"
+      instructions: >-
+        Money is integer pence (`*_minor`), signed from the account holder's
+        point of view: negative is money out, cards included. Flag float
+        arithmetic on money and sign handling that breaks this.
+    - path: "backend/app/migrations.py"
+      instructions: >-
+        Shipped migration steps must never be edited or reordered. A schema
+        change is a new step that upgrades an existing database in place.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Keep permissions minimal per job, pin actions to a version, and never
+        print secrets.
+  tools:
+    gitleaks:
+      enabled: true
+    ruff:
+      enabled: true
+    eslint:
+      enabled: true
+    actionlint:
+      enabled: true
+    hadolint:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+chat:
+  auto_reply: true
