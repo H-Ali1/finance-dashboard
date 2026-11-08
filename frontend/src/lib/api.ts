@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export class ApiError extends Error {
   status: number;
@@ -42,27 +42,41 @@ export const api = {
 
 /** Fetch-on-mount with a manual refresh handle; `deps` re-runs the request. */
 export function useApi<T>(path: string | null, deps: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(Boolean(path));
+  // Hooks need a dependency list of fixed length, so the variable-length
+  // `deps` (always plain values) are folded into one key.
+  const key = JSON.stringify([path, deps]);
+  const [result, setResult] = useState<{ key: string; data: T | null; error: string | null } | null>(null);
+  // The newest request: an answer to an older one that arrives late is dropped.
+  const latest = useRef(key);
 
-  const load = useCallback(async () => {
-    if (!path) return;
-    setLoading(true);
-    try {
-      setData(await api.get<T>(path));
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, ...deps]);
+  // State is only set once an answer arrives, never while asking.
+  const settle = useCallback(
+    (request: Promise<T>) =>
+      request.then(
+        (data) => {
+          if (latest.current === key) setResult({ key, data, error: null });
+        },
+        (err) => {
+          const error = err instanceof Error ? err.message : String(err);
+          if (latest.current === key) setResult((prev) => ({ key, data: prev?.data ?? null, error }));
+        },
+      ),
+    [key],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    latest.current = key;
+    if (path) void settle(api.get<T>(path));
+  }, [key, path, settle]);
 
-  return { data, error, loading, reload: load };
+  const reload = useCallback(() => (path ? settle(api.get<T>(path)) : Promise.resolve()), [path, settle]);
+
+  const fresh = result?.key === key;
+  return {
+    // The previous answer stays on screen while a new one loads.
+    data: result?.data ?? null,
+    error: fresh ? result.error : null,
+    loading: Boolean(path) && !fresh,
+    reload,
+  };
 }

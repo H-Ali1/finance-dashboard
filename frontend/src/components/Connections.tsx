@@ -78,8 +78,9 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
 
       {data.providers.truelayer?.configured && (
         <ConnectBank
+          key={reconnect?.at ?? "new"}
           connections={data.connections}
-          reconnect={reconnect}
+          initialBankId={reconnect?.bankId ?? ""}
           onConnected={(text) => {
             setMessage(text);
             refresh();
@@ -204,17 +205,17 @@ export default function Connections({ onSynced }: { onSynced: () => void }) {
  */
 function ConnectBank({
   connections,
-  reconnect,
+  initialBankId,
   onConnected,
 }: {
   connections: Connection[];
-  reconnect: { bankId: string; at: number } | null;
+  initialBankId: string;
   onConnected: (message: string) => void;
 }) {
   const banks = useApi<{ banks: TrueLayerBank[] }>("/api/truelayer/banks");
-  const [bankId, setBankId] = useState("");
-  const [link, setLink] = useState<string | null>(null);
-  const [linkError, setLinkError] = useState<string | null>(null);
+  const [bankId, setBankId] = useState(initialBankId);
+  // The approval address for one bank and attempt; `key` says which.
+  const [link, setLink] = useState<{ key: string; url: string | null; error: string | null } | null>(null);
   const [opened, setOpened] = useState(false);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -222,36 +223,30 @@ function ConnectBank({
   const [linkVersion, setLinkVersion] = useState(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // "Connect again" in the table picks the bank here.
+  // Arriving from "Connect again" in the table: bring this card into view.
   useEffect(() => {
-    if (!reconnect) return;
-    setBankId(reconnect.bankId);
-    setLinkVersion((v) => v + 1);
-    setOpened(false);
-    setCode("");
-    setResult(null);
-    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [reconnect]);
+    if (initialBankId) cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [initialBankId]);
 
   // Each address works once, so a fresh one is made per attempt.
+  const linkKey = `${bankId}:${linkVersion}`;
   useEffect(() => {
-    setLink(null);
-    setLinkError(null);
     if (!bankId) return;
     const bank = banks.data?.banks.find((b) => b.provider_id === bankId);
     let cancelled = false;
     api
       .post<{ url: string }>("/api/truelayer/link", { bank_id: bankId, scopes: bank?.scopes })
       .then((response) => {
-        if (!cancelled) setLink(response.url);
+        if (!cancelled) setLink({ key: linkKey, url: response.url, error: null });
       })
       .catch((err) => {
-        if (!cancelled) setLinkError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setLink({ key: linkKey, url: null, error: err instanceof Error ? err.message : String(err) });
       });
     return () => {
       cancelled = true;
     };
-  }, [bankId, linkVersion, banks.data]);
+  }, [bankId, linkKey, banks.data]);
+  const current = bankId && link?.key === linkKey ? link : null;
 
   const connectedIds = new Set(connections.filter((c) => c.provider === "truelayer").map((c) => c.bank_id));
   const bankName = banks.data?.banks.find((b) => b.provider_id === bankId)?.name ?? "your bank";
@@ -309,10 +304,10 @@ function ConnectBank({
                 ))}
               </select>
               {bankId &&
-                (link ? (
+                (current?.url ? (
                   <a
                     className="btn btn-primary"
-                    href={link}
+                    href={current.url}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={() => {
@@ -324,7 +319,7 @@ function ConnectBank({
                     1. Approve at {bankName}
                   </a>
                 ) : (
-                  <span className="muted tiny">{linkError ?? "Preparing…"}</span>
+                  <span className="muted tiny">{current?.error ?? "Preparing…"}</span>
                 ))}
             </div>
 
