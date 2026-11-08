@@ -17,6 +17,16 @@ from .base import ProviderError, RawAccount, RawTransaction
 
 TIMEOUT = httpx.Timeout(30.0)
 
+# Starling caps how long a period one transactions request may cover, and
+# doesn't publish the cap. History is read backwards from today in windows of
+# this size, halved whenever Starling says a window is too long.
+FEED_WINDOW = dt.timedelta(days=90)
+MIN_FEED_WINDOW = dt.timedelta(days=7)
+
+
+class RangeTooLong(ProviderError):
+    """Starling refused a transactions request for covering too long a period."""
+
 
 def _client() -> httpx.Client:
     if not settings.starling_configured:
@@ -34,11 +44,13 @@ def _client() -> httpx.Client:
 
 def _get(client: httpx.Client, path: str, **params) -> dict:
     resp = client.get(path, params=params or None)
-    if resp.status_code == 403:
+    if resp.status_code in (401, 403):
         raise ProviderError(
-            "Starling rejected the token (403). Check it has not been revoked and "
+            f"Starling rejected the token ({resp.status_code}). Check it has not been revoked and "
             "that it carries the account/balance/transaction read scopes."
         )
+    if resp.status_code == 400 and "QUERY_EXCEEDING_MAX_TIME_RANGE" in resp.text:
+        raise RangeTooLong(f"Starling {path}: period too long")
     if resp.status_code >= 400:
         raise ProviderError(f"Starling {path} failed: {resp.status_code} {resp.text[:200]}")
     return resp.json()
@@ -107,16 +119,31 @@ def fetch_transactions(account: RawAccount | dict, since: dt.date) -> list[RawTr
     end = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
     path = f"/api/v2/feed/account/{external_id}/category/{category}/transactions-between"
 
+    items: dict[str, dict] = {}
     with _client() as client:
-        payload = _get(
-            client,
-            path,
-            minTransactionTimestamp=_iso(start),
-            maxTransactionTimestamp=_iso(end),
-        )
+        window_end, window = end, FEED_WINDOW
+        while window_end > start:
+            window_start = max(start, window_end - window)
+            try:
+                payload = _get(
+                    client,
+                    path,
+                    minTransactionTimestamp=_iso(window_start),
+                    maxTransactionTimestamp=_iso(window_end),
+                )
+            except RangeTooLong:
+                if window > MIN_FEED_WINDOW:
+                    window = max(MIN_FEED_WINDOW, window / 2)
+                    continue
+                if window_end == end:
+                    raise ProviderError("Starling refused even a one-week transactions request") from None
+                break  # as far back as Starling will go; keep what we have
+            for item in payload.get("feedItems", []):
+                items[item["feedItemUid"]] = item  # windows share their edges
+            window_end = window_start
 
     out: list[RawTransaction] = []
-    for item in payload.get("feedItems", []):
+    for item in items.values():
         status = (item.get("status") or "").upper()
         if status in {"DECLINED", "REJECTED", "REVERSED"}:
             continue

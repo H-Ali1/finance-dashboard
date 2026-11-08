@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 
 import httpx
 import pytest
 
 from app.config import settings
-from app.providers import csv_import, trading212
-from app.providers.base import ProviderError
+from app.providers import csv_import, starling, trading212
+from app.providers.base import ProviderError, RawAccount
 
 # --- Trading 212 ----------------------------------------------------------------
 # Shaped like the AccountSummary and Position schemas in Trading 212's OpenAPI spec.
@@ -98,6 +99,71 @@ def test_trading212_bad_credentials_explain_themselves(monkeypatch):
     )
     with pytest.raises(ProviderError, match="newer keys also need their API secret"):
         trading212.fetch_account(trading212.Credentials("KEY"))
+
+
+# --- Starling ---------------------------------------------------------------------
+class FakeStarling:
+    """Answers transactions-between like Starling: one item per day, refusing
+    windows longer than max_days or reaching back past `oldest`."""
+
+    def __init__(self, max_days: int, oldest: dt.datetime):
+        self.max_days, self.oldest, self.calls = max_days, oldest, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, path, params=None):
+        lo = dt.datetime.fromisoformat(params["minTransactionTimestamp"].replace("Z", "+00:00"))
+        hi = dt.datetime.fromisoformat(params["maxTransactionTimestamp"].replace("Z", "+00:00"))
+        self.calls.append((lo, hi))
+        request = httpx.Request("GET", "https://api.starlingbank.com" + path)
+        if hi - lo > dt.timedelta(days=self.max_days) or lo < self.oldest:
+            return httpx.Response(400, json={"errors": [{"message": "QUERY_EXCEEDING_MAX_TIME_RANGE"}], "success": False}, request=request)
+        day = dt.datetime.combine(lo.date(), dt.time(12), tzinfo=dt.timezone.utc)
+        items = []
+        while day <= hi:  # edges are inclusive, so neighbouring windows overlap
+            if day >= lo:
+                items.append({
+                    "feedItemUid": f"uid-{day.date()}", "status": "SETTLED", "direction": "OUT",
+                    "amount": {"currency": "GBP", "minorUnits": 100}, "transactionTime": day.isoformat(),
+                    "counterPartyName": "TESCO",
+                })
+            day += dt.timedelta(days=1)
+        return httpx.Response(200, json={"feedItems": items}, request=request)
+
+
+STARLING_ACCOUNT = RawAccount(
+    external_id="acc-1", name="Personal", kind="current", currency="GBP",
+    balance_minor=0, meta={"default_category": "cat-1"},
+)
+
+
+def test_starling_reads_two_years_in_windows_it_accepts(monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    fake = FakeStarling(max_days=40, oldest=now - dt.timedelta(days=3650))
+    monkeypatch.setattr(starling, "_client", lambda: fake)
+
+    since = (now - dt.timedelta(days=730)).date()
+    rows = starling.fetch_transactions(STARLING_ACCOUNT, since)
+
+    assert len(fake.calls) < 40  # 90 and 45 days refused, then ~22-day windows
+    assert len({r.external_id for r in rows}) == len(rows)  # overlapping edges not doubled
+    assert min(r.booked_on for r in rows) == since
+    assert max(r.booked_on for r in rows) >= now.date()
+
+
+def test_starling_keeps_what_it_has_when_history_runs_out(monkeypatch):
+    now = dt.datetime.now(dt.timezone.utc)
+    fake = FakeStarling(max_days=400, oldest=now - dt.timedelta(days=200))
+    monkeypatch.setattr(starling, "_client", lambda: fake)
+
+    rows = starling.fetch_transactions(STARLING_ACCOUNT, (now - dt.timedelta(days=730)).date())
+
+    assert rows and min(r.booked_on for r in rows) >= (now - dt.timedelta(days=200)).date()
+    assert len(fake.calls) < 15
 
 
 # --- statement imports ------------------------------------------------------------
