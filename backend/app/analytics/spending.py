@@ -204,9 +204,7 @@ def budget_status(db: Session, key: str | None = None) -> dict:
                 "limit": to_major(budget.monthly_limit_minor),
                 "spent": to_major(used),
                 "remaining": to_major(budget.monthly_limit_minor - used),
-                "used_pct": round(used / budget.monthly_limit_minor * 100, 1)
-                if budget.monthly_limit_minor
-                else None,
+                "used_pct": round(used / budget.monthly_limit_minor * 100, 1) if budget.monthly_limit_minor else None,
                 "typical": to_major(typical),
                 "projected": to_major(projected),
                 "on_track": projected <= budget.monthly_limit_minor,
@@ -248,11 +246,4 @@ def account_spend(db: Session, start: dt.date, end: dt.date) -> dict:
 
 
 def uncategorised_count(db: Session) -> int:
-    return len(
-        [
-            t
-            for t in db.scalars(
-                select(Transaction).where(Transaction.category == "Uncategorised")
-            )
-        ]
-    )
+    return len([t for t in db.scalars(select(Transaction).where(Transaction.category == "Uncategorised"))])

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import defaultdict
+from itertools import pairwise
 from statistics import median
 
 from sqlalchemy.orm import Session
@@ -85,7 +86,7 @@ def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[di
         if len(days) < 3:
             continue
 
-        gaps = [(b - a).days for a, b in zip(days, days[1:])]
+        gaps = [(b - a).days for a, b in pairwise(days)]
         med_gap = median(gaps)
         if med_gap < 6:
             continue  # several times a week — a shop, not a subscription
@@ -174,7 +175,7 @@ def _flag_duplicates(items: list[dict]) -> None:
         if item["status"] != "stopped":
             by_family[item["family"]].append(item)
 
-    for family, group in by_family.items():
+    for group in by_family.values():
         if len(group) < 2:
             continue
         accounts = {g["account_id"] for g in group}
@@ -214,10 +215,6 @@ def recurring_keys(items: list[dict]) -> set[str]:
 
 def upcoming(items: list[dict], days: int = 30) -> list[dict]:
     return sorted(
-        (
-            i
-            for i in items
-            if i["status"] in {"active", "overdue"} and 0 <= i["days_until_due"] <= days
-        ),
+        (i for i in items if i["status"] in {"active", "overdue"} and 0 <= i["days_until_due"] <= days),
         key=lambda i: i["days_until_due"],
     )

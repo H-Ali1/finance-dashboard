@@ -61,7 +61,9 @@ def test_version_1_database_gains_the_bank_link_columns(tmp_path):
         "CREATE TABLE connections (id INTEGER PRIMARY KEY, provider VARCHAR(32), institution_name VARCHAR(128), "
         "status VARCHAR(32), last_synced_at DATETIME, last_error TEXT, created_at DATETIME)"
     )
-    conn.execute("INSERT INTO connections (provider, institution_name, status) VALUES ('starling', 'Starling', 'linked')")
+    conn.execute(
+        "INSERT INTO connections (provider, institution_name, status) VALUES ('starling', 'Starling', 'linked')"
+    )
     conn.execute("PRAGMA user_version = 1")
     conn.commit()
     conn.close()
@@ -143,7 +145,9 @@ def test_failed_sync_retries_sooner_with_backoff(seeded, monkeypatch):
 
 def test_retry_never_waits_longer_than_the_normal_interval(seeded, monkeypatch):
     monkeypatch.setattr(settings, "sync_interval_hours", 1)
-    monkeypatch.setattr(scheduler.sync_service, "sync_all", lambda _db, **_kwargs: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr(
+        scheduler.sync_service, "sync_all", lambda _db, **_kwargs: (_ for _ in ()).throw(OSError("down"))
+    )
     monkeypatch.setitem(scheduler._state, "consecutive_failures", 10)
     before = dt.datetime.now(dt.timezone.utc)
     scheduler.run_sync()

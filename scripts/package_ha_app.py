@@ -47,8 +47,11 @@ def main() -> int:
     # pulling the published image from GitHub.
     config = OUT / "config.yaml"
     config.write_text(
-        "".join(line for line in config.read_text(encoding="utf-8").splitlines(keepends=True)
-                if not line.startswith("image:")),
+        "".join(
+            line
+            for line in config.read_text(encoding="utf-8").splitlines(keepends=True)
+            if not line.startswith("image:")
+        ),
         encoding="utf-8",
     )
 

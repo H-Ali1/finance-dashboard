@@ -73,9 +73,7 @@ class Settings(BaseSettings):
     allowed_client_ips: str = ""
     base_currency: str = "GBP"
     # Categories treated as unavoidable when computing runway / essential spend.
-    essential_categories: str = (
-        "Groceries,Bills & Utilities,Rent & Mortgage,Insurance,Transport,Fuel,Health & Fitness"
-    )
+    essential_categories: str = "Groceries,Bills & Utilities,Rent & Mortgage,Insurance,Transport,Fuel,Health & Fitness"
 
     @property
     def essential_category_list(self) -> list[str]:
@@ -108,11 +106,7 @@ def _app_options() -> dict:
     except (OSError, ValueError):
         return {}
     # Blank optional fields fall through to the environment / defaults.
-    return {
-        key: value
-        for key, value in data.items()
-        if key in Settings.model_fields and value not in (None, "")
-    }
+    return {key: value for key, value in data.items() if key in Settings.model_fields and value not in (None, "")}
 
 
 @lru_cache

@@ -148,7 +148,9 @@ def recover_if_corrupt(db: Path | None = None) -> dict | None:
     if restored_from:
         log.error("Restored the database from %s. The damaged file was kept as %s.", restored_from.name, corrupt.name)
     else:
-        log.error("No good backup was found; starting with an empty database. The damaged file was kept as %s.", corrupt.name)
+        log.error(
+            "No good backup was found; starting with an empty database. The damaged file was kept as %s.", corrupt.name
+        )
     return notice
 
 

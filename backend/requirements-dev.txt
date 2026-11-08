@@ -1,5 +1,7 @@
-# Tests only; never installed in the image.
+# Tests and linting only; never installed in the image.
 -r requirements.txt
 pytest==9.2.0
 # Starlette's TestClient now expects httpx2 (the maintained continuation of httpx).
 httpx2==2.16.0
+# Lint and format checks (see ruff.toml at the repository root).
+ruff==0.17.4

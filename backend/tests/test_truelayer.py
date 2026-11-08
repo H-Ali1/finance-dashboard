@@ -57,47 +57,80 @@ class FakeTrueLayer:
                 200,
                 json=[
                     {"provider_id": "mock", "display_name": "Mock", "scopes": ["accounts", "transactions"]},
-                    {"provider_id": "ob-hsbc", "display_name": "HSBC", "scopes": ["info", "accounts", "balance", "transactions", "cards", "offline_access"]},
-                    {"provider_id": "ob-amex", "display_name": "American Express", "scopes": ["info", "cards", "balance", "transactions", "offline_access"]},
+                    {
+                        "provider_id": "ob-hsbc",
+                        "display_name": "HSBC",
+                        "scopes": ["info", "accounts", "balance", "transactions", "cards", "offline_access"],
+                    },
+                    {
+                        "provider_id": "ob-amex",
+                        "display_name": "American Express",
+                        "scopes": ["info", "cards", "balance", "transactions", "offline_access"],
+                    },
                 ],
             )
         assert request.headers["Authorization"].startswith("Bearer at-"), "data calls need an access token"
         path = url.split("/data/v1", 1)[1].split("?", 1)[0]
         g = self.generation
         if path == "/me":
-            return self._ok([{
-                "credentials_id": f"cred-{g}",
-                "consent_expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=90)).isoformat(),
-                "provider": {"provider_id": "ob-hsbc", "display_name": "HSBC"},
-                "scopes": ["accounts", "balance", "cards", "transactions", "offline_access"],
-            }])
+            return self._ok(
+                [
+                    {
+                        "credentials_id": f"cred-{g}",
+                        "consent_expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=90)).isoformat(),
+                        "provider": {"provider_id": "ob-hsbc", "display_name": "HSBC"},
+                        "scopes": ["accounts", "balance", "cards", "transactions", "offline_access"],
+                    }
+                ]
+            )
         if path == "/accounts":
-            return self._ok([{
-                "account_id": f"acc-{g}", "account_type": "TRANSACTION", "display_name": "Advance",
-                "currency": "GBP", "account_number": {"sort_code": "40-11-22", "number": "12345678"},
-                "provider": {"provider_id": "ob-hsbc"},
-            }])
+            return self._ok(
+                [
+                    {
+                        "account_id": f"acc-{g}",
+                        "account_type": "TRANSACTION",
+                        "display_name": "Advance",
+                        "currency": "GBP",
+                        "account_number": {"sort_code": "40-11-22", "number": "12345678"},
+                        "provider": {"provider_id": "ob-hsbc"},
+                    }
+                ]
+            )
         if path == f"/accounts/acc-{g}/balance":
             return self._ok([{"currency": "GBP", "current": 1234.56, "available": 1300.0}])
         if path == "/cards":
-            return self._ok([{
-                "account_id": f"card-{g}", "card_type": "CREDIT", "display_name": "HSBC Credit Card",
-                "currency": "GBP", "partial_card_number": "5678", "provider": {"provider_id": "ob-hsbc"},
-            }])
+            return self._ok(
+                [
+                    {
+                        "account_id": f"card-{g}",
+                        "card_type": "CREDIT",
+                        "display_name": "HSBC Credit Card",
+                        "currency": "GBP",
+                        "partial_card_number": "5678",
+                        "provider": {"provider_id": "ob-hsbc"},
+                    }
+                ]
+            )
         if path == f"/cards/card-{g}/balance":
             return self._ok([{"currency": "GBP", "current": 250.0, "available": "2750", "credit_limit": 3000}])
         if path == f"/accounts/acc-{g}/transactions":
-            return self._history(request, [
-                ("rent", 3, -950.0, "DEBIT", "LANDLORD RENT"),
-                ("salary", 10, 2500.0, "CREDIT", "ACME LTD SALARY"),
-                ("old", 300, -12.0, "DEBIT", "TESCO STORES"),
-                ("ancient", 500, -9.0, "DEBIT", "GREGGS"),
-            ])
+            return self._history(
+                request,
+                [
+                    ("rent", 3, -950.0, "DEBIT", "LANDLORD RENT"),
+                    ("salary", 10, 2500.0, "CREDIT", "ACME LTD SALARY"),
+                    ("old", 300, -12.0, "DEBIT", "TESCO STORES"),
+                    ("ancient", 500, -9.0, "DEBIT", "GREGGS"),
+                ],
+            )
         if path == f"/cards/card-{g}/transactions":
-            return self._history(request, [
-                ("shop", 2, 24.25, "DEBIT", "SAINSBURYS SMRKT"),
-                ("payment", 5, 100.0, "CREDIT", "PAYMENT RECEIVED"),
-            ])
+            return self._history(
+                request,
+                [
+                    ("shop", 2, 24.25, "DEBIT", "SAINSBURYS SMRKT"),
+                    ("payment", 5, 100.0, "CREDIT", "PAYMENT RECEIVED"),
+                ],
+            )
         return httpx.Response(404, json={"error": "account_not_found"})
 
     def _ok(self, results):
@@ -110,12 +143,13 @@ class FakeTrueLayer:
             if form["code"][0] != "good-code":
                 return httpx.Response(400, json={"error": "invalid_grant"})
             assert form["redirect_uri"] == ["https://console.truelayer.com/redirect-page"]
-        elif grant == "refresh_token":
-            if form["refresh_token"][0] not in self.refresh_tokens:
-                return httpx.Response(400, json={"error": "invalid_grant"})
+        elif grant == "refresh_token" and form["refresh_token"][0] not in self.refresh_tokens:
+            return httpx.Response(400, json={"error": "invalid_grant"})
         token = f"rt-{len(self.refresh_tokens)}"
         self.refresh_tokens.add(token)
-        return httpx.Response(200, json={"access_token": "at-1", "refresh_token": token, "expires_in": 3600, "token_type": "Bearer"})
+        return httpx.Response(
+            200, json={"access_token": "at-1", "refresh_token": token, "expires_in": 3600, "token_type": "Bearer"}
+        )
 
     def _history(self, request: httpx.Request, rows) -> httpx.Response:
         start = dt.date.fromisoformat(request.url.params["from"])
@@ -126,12 +160,18 @@ class FakeTrueLayer:
         for key, days_ago, amount, kind, description in rows:
             day = TODAY - dt.timedelta(days=days_ago)
             if start <= day <= end:
-                results.append({
-                    "transaction_id": f"{key}-{self.generation}",  # changes on reconnect
-                    "normalised_provider_transaction_id": f"txn-{key}",  # doesn't
-                    "timestamp": _day(days_ago), "description": description, "amount": amount,
-                    "currency": "GBP", "transaction_type": kind, "transaction_classification": [],
-                })
+                results.append(
+                    {
+                        "transaction_id": f"{key}-{self.generation}",  # changes on reconnect
+                        "normalised_provider_transaction_id": f"txn-{key}",  # doesn't
+                        "timestamp": _day(days_ago),
+                        "description": description,
+                        "amount": amount,
+                        "currency": "GBP",
+                        "transaction_type": kind,
+                        "transaction_classification": [],
+                    }
+                )
         return self._ok(results)
 
     def data_calls(self, fragment: str) -> list[tuple[str, str, dict]]:
@@ -221,8 +261,12 @@ def test_connecting_reads_accounts_cards_balances_and_history(client, fake, hsbc
     assert "TESCO STORES" in rows and "GREGGS" not in rows
 
     db = SessionLocal()
-    card = db.scalar(select(Account).where(Account.connection_id == hsbc["connection_id"], Account.kind == "credit_card"))
-    current = db.scalar(select(Account).where(Account.connection_id == hsbc["connection_id"], Account.kind == "current"))
+    card = db.scalar(
+        select(Account).where(Account.connection_id == hsbc["connection_id"], Account.kind == "credit_card")
+    )
+    current = db.scalar(
+        select(Account).where(Account.connection_id == hsbc["connection_id"], Account.kind == "current")
+    )
     db.close()
     assert card.balance_minor == -25000  # owed
     assert (current.balance_minor, current.available_minor) == (123456, 130000)
@@ -280,7 +324,10 @@ def test_schedule_reads_each_bank_at_most_every_eight_hours(fake, hsbc):
     assert not fake.data_calls("/data/v1/accounts")  # just read when it was connected
 
     connection = db.get(Connection, hsbc["connection_id"])
-    connection.meta = {**connection.meta, "last_attempt_at": (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=9)).isoformat()}
+    connection.meta = {
+        **connection.meta,
+        "last_attempt_at": (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=9)).isoformat(),
+    }
     db.commit()
     result = sync_service.sync_all(db, unattended=True)
     db.close()

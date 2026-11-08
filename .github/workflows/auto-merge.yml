@@ -1,0 +1,55 @@
+# Turns on GitHub's auto-merge for each pull request into main, so it merges
+# itself (squashed) once the required checks pass and every review
+# conversation is resolved. What "required" means lives in the `main` ruleset
+# (Settings -> Rules); this workflow only switches auto-merge on.
+#
+# A merge switched on with this workflow's own GITHUB_TOKEN doesn't start other
+# workflows, so the release that normally follows a push to main wouldn't run.
+# With an AUTOMERGE_TOKEN secret (a fine-grained token for this repository
+# with Contents and Pull requests read/write) the merge counts as yours and the
+# release runs as usual.
+name: Auto-merge
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    name: Enable auto-merge
+    # Drafts wait until they're marked ready. Only the owner's own branches and
+    # Dependabot, never a fork.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.user.login == github.repository_owner ||
+       github.event.pull_request.user.login == 'dependabot[bot]')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: What Dependabot is updating
+        id: dependabot
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
+        uses: dependabot/fetch-metadata@v3
+
+      - name: Enable auto-merge
+        # Major-version updates can break things the tests don't cover; those
+        # wait for a person.
+        if: steps.dependabot.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_OWN_TOKEN: ${{ secrets.AUTOMERGE_TOKEN != '' }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            echo "Auto-merge is already on."
+            exit 0
+          fi
+          gh pr merge "$PR" --auto --squash
+          if [ "$HAS_OWN_TOKEN" != "true" ]; then
+            echo "::warning::No AUTOMERGE_TOKEN secret: this PR will merge, but the release on main won't start by itself."
+          fi

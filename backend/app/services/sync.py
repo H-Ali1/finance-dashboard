@@ -10,8 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import Account, CategoryRule, Connection, SyncLog, Transaction
-from ..providers import ProviderError, RawAccount, RawTransaction
-from ..providers import starling, trading212, truelayer
+from ..providers import ProviderError, RawAccount, RawTransaction, starling, trading212, truelayer
 from .categorise import categorise, display_merchant, normalise_merchant
 from .transfers import detect_transfers
 
@@ -37,9 +36,7 @@ def _rules(db: Session) -> list[CategoryRule]:
 
 
 def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Connection | None) -> Account:
-    account = db.scalar(
-        select(Account).where(Account.provider == provider, Account.external_id == raw.external_id)
-    )
+    account = db.scalar(select(Account).where(Account.provider == provider, Account.external_id == raw.external_id))
     if account is None:
         account = Account(provider=provider, external_id=raw.external_id)
         db.add(account)
@@ -63,9 +60,7 @@ def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Conn
 
 
 def _since_for(db: Session, account: Account) -> dt.date:
-    latest = db.scalar(
-        select(func.max(Transaction.booked_on)).where(Transaction.account_id == account.id)
-    )
+    latest = db.scalar(select(func.max(Transaction.booked_on)).where(Transaction.account_id == account.id))
     if latest:
         return latest - dt.timedelta(days=OVERLAP_DAYS)
     return dt.date.today() - dt.timedelta(days=DEFAULT_LOOKBACK_DAYS)
@@ -76,10 +71,7 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
         return 0
     rules = _rules(db)
     existing = {
-        row[0]
-        for row in db.execute(
-            select(Transaction.external_id).where(Transaction.account_id == account.id)
-        )
+        row[0] for row in db.execute(select(Transaction.external_id).where(Transaction.account_id == account.id))
     }
 
     added = 0

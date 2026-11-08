@@ -11,10 +11,9 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Account, Budget, CategoryRule, Transaction
 from ..money import to_major, to_minor
-from ..providers import ProviderError
-from ..providers import csv_import
+from ..providers import ProviderError, csv_import
 from ..schemas import BudgetUpsert, RuleCreate, TransactionUpdate
-from ..services.categorise import CATEGORIES, display_merchant, normalise_merchant
+from ..services.categorise import CATEGORIES, normalise_merchant
 from ..services.sync import recategorise_all, upsert_transactions
 from ..services.transfers import detect_transfers
 
@@ -80,9 +79,7 @@ def list_transactions(
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
         db.scalars(
-            stmt.order_by(Transaction.booked_on.desc(), Transaction.id.desc())
-            .limit(min(limit, 1000))
-            .offset(offset)
+            stmt.order_by(Transaction.booked_on.desc(), Transaction.id.desc()).limit(min(limit, 1000)).offset(offset)
         )
     )
     accounts = {a.id: a for a in db.scalars(select(Account))}
@@ -95,9 +92,7 @@ def list_transactions(
 
 
 @router.patch("/transactions/{transaction_id}")
-def update_transaction(
-    transaction_id: int, payload: TransactionUpdate, db: Session = Depends(get_db)
-) -> dict:
+def update_transaction(transaction_id: int, payload: TransactionUpdate, db: Session = Depends(get_db)) -> dict:
     txn = db.get(Transaction, transaction_id)
     if txn is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -185,8 +180,7 @@ def list_budgets(db: Session = Depends(get_db)) -> dict:
     rows = db.scalars(select(Budget).order_by(Budget.category))
     return {
         "budgets": [
-            {"id": b.id, "category": b.category, "monthly_limit": to_major(b.monthly_limit_minor)}
-            for b in rows
+            {"id": b.id, "category": b.category, "monthly_limit": to_major(b.monthly_limit_minor)} for b in rows
         ]
     }
 
@@ -221,9 +215,7 @@ def create_manual_account(
     db: Session = Depends(get_db),
 ) -> dict:
     external_id = f"manual:{name.lower().replace(' ', '-')}"
-    existing = db.scalar(
-        select(Account).where(Account.provider == "csv", Account.external_id == external_id)
-    )
+    existing = db.scalar(select(Account).where(Account.provider == "csv", Account.external_id == external_id))
     if existing:
         return {"id": existing.id, "name": existing.name, "created": False}
 

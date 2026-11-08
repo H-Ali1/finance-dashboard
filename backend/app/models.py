@@ -83,9 +83,7 @@ class Account(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     connection: Mapped[Connection | None] = relationship(back_populates="accounts")
-    transactions: Mapped[list[Transaction]] = relationship(
-        back_populates="account", cascade="all, delete-orphan"
-    )
+    transactions: Mapped[list[Transaction]] = relationship(back_populates="account", cascade="all, delete-orphan")
 
     @property
     def is_liability(self) -> bool:
@@ -105,9 +103,7 @@ class Account(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (
-        UniqueConstraint("account_id", "external_id", name="uq_txn_account_ext"),
-    )
+    __table_args__ = (UniqueConstraint("account_id", "external_id", name="uq_txn_account_ext"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
@@ -170,9 +166,7 @@ class ManualAsset(Base):
     # Optional straight-line depreciation, handy for the car.
     annual_change_pct: Mapped[float | None] = mapped_column()
     notes: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
-    )
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
 class NetWorthSnapshot(Base):

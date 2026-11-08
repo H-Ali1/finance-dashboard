@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import defaultdict
+from itertools import pairwise
 
 from sqlalchemy.orm import Session
 
@@ -108,7 +109,7 @@ def detect_double_charges(db: Session, window_days: int = 3) -> list[dict]:
         if len(rows) < 2 or -amount < 1000:  # ignore sub-£10 repeats
             continue
         rows.sort(key=lambda t: t.booked_on)
-        for first, second in zip(rows, rows[1:]):
+        for first, second in pairwise(rows):
             if (second.booked_on - first.booked_on).days <= window_days:
                 account = accounts.get(account_id)
                 out.append(

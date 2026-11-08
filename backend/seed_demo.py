@@ -38,7 +38,15 @@ ACCOUNTS = [
 ]
 
 GROCERS = ["TESCO STORES 3315 LONDON", "SAINSBURYS SMKT", "ALDI 812", "LIDL GB LONDON", "CO-OP GROUP 4421"]
-EATING = ["PRET A MANGER 293", "GREGGS PLC", "NANDOS CHICKENLAND", "DELIVEROO", "UBER EATS", "COSTA COFFEE 8812", "FIVE GUYS SOHO"]
+EATING = [
+    "PRET A MANGER 293",
+    "GREGGS PLC",
+    "NANDOS CHICKENLAND",
+    "DELIVEROO",
+    "UBER EATS",
+    "COSTA COFFEE 8812",
+    "FIVE GUYS SOHO",
+]
 SHOPS = ["AMAZON.CO.UK*MK4TR", "ARGOS LTD", "ZARA UK", "JD SPORTS", "IKEA WEMBLEY", "SCREWFIX DIRECT"]
 TRANSPORT = ["TFL TRAVEL CH", "UBER *TRIP", "TRAINLINE.COM", "RINGGO PARKING"]
 FUEL = ["SHELL WEMBLEY", "BP CONNECT HANGER LANE", "ESSO EDGWARE RD"]
@@ -194,11 +202,7 @@ def seed(reset_first: bool = False, verbose: bool = True) -> None:
             ("Workplace pension (Aviva)", "pension", "asset", 23_400.00),
         ]:
             if not db.query(ManualAsset).filter_by(name=name).first():
-                db.add(
-                    ManualAsset(
-                        name=name, category=category, kind=kind, value_minor=to_minor(value)
-                    )
-                )
+                db.add(ManualAsset(name=name, category=category, kind=kind, value_minor=to_minor(value)))
 
         for category, limit in [
             ("Groceries", 400),
@@ -225,10 +229,38 @@ def seed(reset_first: bool = False, verbose: bool = True) -> None:
 
 def _demo_holdings() -> list[dict]:
     return [
-        {"ticker": "VUAG", "quantity": 41.2, "average_price": 82.1, "current_price": 96.4, "value": 3971.68, "ppl": 589.16},
-        {"ticker": "VWRP", "quantity": 24.0, "average_price": 104.0, "current_price": 118.7, "value": 2848.80, "ppl": 352.80},
-        {"ticker": "AAPL", "quantity": 12.0, "average_price": 141.2, "current_price": 176.9, "value": 2122.80, "ppl": 428.40},
-        {"ticker": "MSFT", "quantity": 5.5, "average_price": 310.0, "current_price": 388.2, "value": 2135.10, "ppl": 430.10},
+        {
+            "ticker": "VUAG",
+            "quantity": 41.2,
+            "average_price": 82.1,
+            "current_price": 96.4,
+            "value": 3971.68,
+            "ppl": 589.16,
+        },
+        {
+            "ticker": "VWRP",
+            "quantity": 24.0,
+            "average_price": 104.0,
+            "current_price": 118.7,
+            "value": 2848.80,
+            "ppl": 352.80,
+        },
+        {
+            "ticker": "AAPL",
+            "quantity": 12.0,
+            "average_price": 141.2,
+            "current_price": 176.9,
+            "value": 2122.80,
+            "ppl": 428.40,
+        },
+        {
+            "ticker": "MSFT",
+            "quantity": 5.5,
+            "average_price": 310.0,
+            "current_price": 388.2,
+            "value": 2135.10,
+            "ppl": 430.10,
+        },
     ]
 
 

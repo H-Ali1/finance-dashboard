@@ -133,13 +133,8 @@ def insights(db: Session = Depends(get_db)) -> dict:
     return {
         "headline": insights_mod.headline(db),
         "insights": findings,
-        "by_area": {
-            area: [f for f in findings if f["area"] == area]
-            for area in sorted({f["area"] for f in findings})
-        },
-        "total_annual_impact": round(
-            sum(f["impact"] or 0 for f in findings if f["impact_period"] == "year"), 2
-        ),
+        "by_area": {area: [f for f in findings if f["area"] == area] for area in sorted({f["area"] for f in findings})},
+        "total_annual_impact": round(sum(f["impact"] or 0 for f in findings if f["impact_period"] == "year"), 2),
     }
 
 
