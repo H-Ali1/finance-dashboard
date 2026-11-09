@@ -262,6 +262,24 @@ export interface Transaction {
   institution: string;
 }
 
+export interface UncategorisedMerchant {
+  merchant: string;
+  merchant_key: string;
+  example: string;
+  last_date: string;
+  account: string;
+  transactions: number;
+  total: number;
+}
+
+export interface UncategorisedList {
+  days: number;
+  total: number;
+  transactions: number;
+  merchant_count: number;
+  merchants: UncategorisedMerchant[];
+}
+
 export interface Connection {
   id: number;
   provider: string;

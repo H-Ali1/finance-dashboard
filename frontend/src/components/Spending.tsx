@@ -12,6 +12,7 @@ import {
 import { api, useApi } from "../lib/api";
 import { categoryColor, money, moneyShort, monthLabel, percent } from "../lib/format";
 import type { BudgetStatus, CategoryTrend, SpendingBreakdown } from "../types";
+import NeedsCategory from "./NeedsCategory";
 import { BarList, Card, ChartTooltip, Empty, ErrorBanner, Loading } from "./ui";
 
 const AXIS = { tick: { fill: "var(--text-muted)", fontSize: 11 }, tickLine: false, axisLine: { stroke: "var(--axis)" } };
@@ -30,14 +31,16 @@ export default function Spending() {
   const months = recentMonths(13);
   const [month, setMonth] = useState(months[0]);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumped when a merchant is categorised, so every total re-reads.
+  const [categorised, setCategorised] = useState(0);
 
-  const breakdown = useApi<SpendingBreakdown>(`/api/spending/categories?month=${month}`, [month]);
+  const breakdown = useApi<SpendingBreakdown>(`/api/spending/categories?month=${month}`, [month, categorised]);
   const merchants = useApi<{ merchants: { merchant: string; category: string; total: number; transactions: number; average: number }[] }>(
     `/api/spending/merchants?month=${month}&limit=15`,
-    [month],
+    [month, categorised],
   );
-  const trend = useApi<CategoryTrend>("/api/spending/by-category-trend?months=6&limit=10");
-  const budgets = useApi<BudgetStatus>(`/api/spending/budgets?month=${month}`, [month, reloadKey]);
+  const trend = useApi<CategoryTrend>("/api/spending/by-category-trend?months=6&limit=10", [categorised]);
+  const budgets = useApi<BudgetStatus>(`/api/spending/budgets?month=${month}`, [month, reloadKey, categorised]);
   const accounts = useApi<{ accounts: { account: string; institution: string; total: number }[] }>(
     `/api/spending/accounts?month=${month}`,
     [month],
@@ -100,6 +103,8 @@ export default function Spending() {
           )}
         </Card>
       </div>
+
+      <NeedsCategory onChange={() => setCategorised((key) => key + 1)} />
 
       <Card
         title="Category trend"

@@ -406,31 +406,110 @@ def _raw_transaction(row: dict, *, is_card: bool) -> RawTransaction:
         description=description,
         merchant=merchant or description,
         provider_category=_category(row.get("transaction_classification") or []),
+        payment_type=_payment_type(row.get("transaction_category"), meta.get("provider_transaction_category")),
     )
 
 
-# TrueLayer's classification, e.g. ["Shopping", "Groceries"], in the terms the
-# categoriser already knows from Starling. Keywords and your rules still win.
-_TOP = {
-    "food and dining": "EATING_OUT",
-    "auto and transport": "TRANSPORT",
-    "shopping": "SHOPPING",
-    "bills and utilities": "BILLS_AND_SERVICES",
-    "entertainment": "ENTERTAINMENT",
-    "travel": "HOLIDAYS",
-    "personal care": "PERSONAL_CARE",
-    "health and fitness": "PERSONAL_CARE",
-    "gifts and donations": "GIFTS",
-    "home": "HOME",
-    "investments": "SAVING",
+# TrueLayer's transaction_category, and the bank's own code where TrueLayer's
+# is only "debit" or "credit" (HSBC sends "SO", "DD", "VIS", ")))", ...).
+_TL_TYPES = {
+    "PURCHASE": "card",
+    "DIRECT_DEBIT": "direct_debit",
+    "STANDING_ORDER": "standing_order",
+    "BILL_PAYMENT": "transfer",
+    "TRANSFER": "transfer",
+    "ATM": "cash",
+    "CASH": "cash",
+    "INTEREST": "interest",
+    "FEE_CHARGE": "fee",
+    "DIVIDEND": "dividend",
+}
+_BANK_CODES = {
+    "VIS": "card",
+    ")))": "card",
+    "POS": "card",
+    "CARD": "card",
+    "DD": "direct_debit",
+    "DDR": "direct_debit",
+    "SO": "standing_order",
+    "STO": "standing_order",
+    "BP": "transfer",
+    "FPI": "transfer",
+    "FPO": "transfer",
+    "TFR": "transfer",
+    "BGC": "transfer",
+    "OBP": "transfer",
+    "CR": "transfer",
+    "ATM": "cash",
+    "CPT": "cash",
+    "INT": "interest",
+    "FEE": "fee",
+    "CHG": "fee",
+}
+
+
+def _payment_type(category: str | None, bank_code: str | None) -> str | None:
+    by_category = _TL_TYPES.get((category or "").strip().upper())
+    return by_category or _BANK_CODES.get((bank_code or "").strip().upper())
+
+
+# TrueLayer's classification, e.g. ["Auto & Transport", "Gas & Fuel"], as our
+# category names. The detail is checked before the group, so fuel is Fuel
+# rather than Transport and rent is Rent & Mortgage rather than Home.
+_DETAIL = {
+    "groceries": "Groceries",
+    "gas and fuel": "Fuel",
+    "fuel": "Fuel",
+    "parking": "Transport",
+    "public transport": "Transport",
+    "taxi": "Transport",
+    "auto insurance": "Insurance",
+    "rent": "Rent & Mortgage",
+    "mortgage": "Rent & Mortgage",
+    "mortgage and rent": "Rent & Mortgage",
+    "life insurance": "Insurance",
+    "health insurance": "Insurance",
+    "buildings and contents insurance": "Insurance",
+    "pension payments": "Savings & Investments",
+    "tuition": "Education",
+    "student loan": "Education",
+    "charity": "Gifts & Charity",
+    "television": "Bills & Utilities",
+    "internet": "Bills & Utilities",
+    "mobile phone": "Bills & Utilities",
+    "home phone": "Bills & Utilities",
+    "utilities": "Bills & Utilities",
+    "air travel": "Travel",
+    "hotel": "Travel",
+    "gym": "Health & Fitness",
+    "pharmacy": "Health & Fitness",
+}
+_GROUP = {
+    "food and dining": "Eating Out",
+    "auto and transport": "Transport",
+    "shopping": "Shopping",
+    "bills and utilities": "Bills & Utilities",
+    "entertainment": "Entertainment",
+    "travel": "Travel",
+    "personal care": "Health & Fitness",
+    "health and fitness": "Health & Fitness",
+    "gifts and donations": "Gifts & Charity",
+    "home": "Shopping",
+    "investments": "Savings & Investments",
+    "education": "Education",
+    "fees and charges": "Fees & Interest",
+    "taxes": "Tax",
+    "gambling": "Entertainment",
+    "pension and insurances": "Insurance",
 }
 
 
 def _category(classification: list[str]) -> str | None:
     names = [c.lower().replace("&", "and").strip() for c in classification if c]
-    if any(n == "groceries" for n in names):
-        return "GROCERIES"
-    return _TOP.get(names[0]) if names else None
+    for name in names:
+        if name in _DETAIL:
+            return _DETAIL[name]
+    return _GROUP.get(names[0]) if names else None
 
 
 def _parse_ts(value: str | None) -> dt.datetime:

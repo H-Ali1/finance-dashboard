@@ -35,6 +35,13 @@ class RuleCreate(BaseModel):
     apply_now: bool = True
 
 
+class MerchantCategory(BaseModel):
+    """Categorise everything from one merchant, past and future."""
+
+    merchant: str = Field(min_length=1, max_length=160)
+    category: str = Field(min_length=1, max_length=48)
+
+
 class BudgetUpsert(BaseModel):
     category: str
     monthly_limit: float

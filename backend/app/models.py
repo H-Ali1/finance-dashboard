@@ -119,6 +119,9 @@ class Transaction(Base):
     category_source: Mapped[str] = mapped_column(String(16), default="auto")  # auto|rule|manual
     provider_category: Mapped[str | None] = mapped_column(String(64))
     mcc: Mapped[str | None] = mapped_column(String(8))
+    # card|direct_debit|standing_order|transfer|cash|interest|fee|internal|dividend,
+    # or None when the provider doesn't say (statement imports, older rows).
+    payment_type: Mapped[str | None] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default="booked")  # booked|pending
     is_transfer: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     transfer_group: Mapped[str | None] = mapped_column(String(64))
@@ -136,7 +139,7 @@ class CategoryRule(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     pattern: Mapped[str] = mapped_column(String(160))
-    match_type: Mapped[str] = mapped_column(String(16), default="contains")  # contains|regex|exact
+    match_type: Mapped[str] = mapped_column(String(16), default="contains")  # contains|words|regex|exact
     field: Mapped[str] = mapped_column(String(16), default="merchant")  # merchant|description
     category: Mapped[str] = mapped_column(String(48))
     priority: Mapped[int] = mapped_column(Integer, default=100)

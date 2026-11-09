@@ -24,6 +24,9 @@ export default function Transactions() {
   const [offset, setOffset] = useState(0);
   const [version, setVersion] = useState(0);
   const [ruleFor, setRuleFor] = useState<Transaction | null>(null);
+  // After one transaction is re-filed: offer the same for the whole merchant.
+  const [offer, setOffer] = useState<{ merchant: string; category: string } | null>(null);
+  const [offerResult, setOfferResult] = useState<string | null>(null);
 
   const params = new URLSearchParams({
     limit: String(PAGE_SIZE),
@@ -53,7 +56,24 @@ export default function Transactions() {
 
   const setCategoryFor = async (txn: Transaction, next: string) => {
     await api.patch(`/api/transactions/${txn.id}`, { category: next });
+    setOffer({ merchant: txn.merchant, category: next });
+    setOfferResult(null);
     refresh();
+  };
+
+  const applyToMerchant = async () => {
+    if (!offer) return;
+    try {
+      const result = await api.post<{ recategorised: number }>("/api/categorise/merchant", offer);
+      setOfferResult(
+        `Done: ${result.recategorised} more transaction${result.recategorised === 1 ? "" : "s"} moved, and future ones will follow.`,
+      );
+      setOffer(null);
+      refresh();
+    } catch (err) {
+      setOffer(null); // the result line, not the question, is what shows the error
+      setOfferResult(err instanceof Error ? err.message : String(err));
+    }
   };
 
   return (
@@ -122,6 +142,34 @@ export default function Transactions() {
           </button>
         </div>
       </Card>
+
+      {(offer || offerResult) && (
+        <div className="banner row-between" role="status">
+          {offer ? (
+            <>
+              <span>
+                Put every <strong>{offer.merchant}</strong> payment in <strong>{offer.category}</strong>, past and
+                future?
+              </span>
+              <span className="row">
+                <button className="btn btn-primary" onClick={applyToMerchant}>
+                  Yes, all of them
+                </button>
+                <button className="btn" onClick={() => setOffer(null)}>
+                  Just this one
+                </button>
+              </span>
+            </>
+          ) : (
+            <>
+              <span>{offerResult}</span>
+              <button className="btn btn-ghost" onClick={() => setOfferResult(null)} aria-label="Dismiss">
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {ruleFor && (
         <RuleForm
@@ -242,7 +290,7 @@ function RuleForm({
       const response = await api.post<{ recategorised: number }>("/api/rules", {
         pattern,
         category,
-        match_type: "contains",
+        match_type: "words",
         field: "merchant",
         apply_now: true,
       });
@@ -260,7 +308,7 @@ function RuleForm({
           value={pattern}
           onChange={(event) => setPattern(event.target.value)}
           style={{ minWidth: 240 }}
-          placeholder="Merchant contains…"
+          placeholder="Merchant name has the words…"
         />
         <span className="muted">→</span>
         <select value={category} onChange={(event) => setCategory(event.target.value)}>

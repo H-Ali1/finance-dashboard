@@ -54,3 +54,20 @@ def client(seeded):
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def fresh_db(tmp_path):
+    """An empty database of its own, for tests that need exact data rather
+    than the shared demo data."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import migrations
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'own.db').as_posix()}")
+    migrations.migrate(engine)
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    yield session
+    session.close()
+    engine.dispose()
