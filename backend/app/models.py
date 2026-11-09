@@ -142,6 +142,8 @@ class CategoryRule(Base):
     """User-defined override: "anything matching X is category Y"."""
 
     __tablename__ = "category_rules"
+    # One rule per pattern: a second save changes the first.
+    __table_args__ = (UniqueConstraint("field", "match_type", "pattern", name="uq_rule_pattern"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     pattern: Mapped[str] = mapped_column(String(160))

@@ -246,18 +246,45 @@ def test_savings_rate_limit_is_a_wait_not_missing_savings(monkeypatch):
         starling.fetch_accounts()
 
 
-def test_saving_a_rule_folds_in_older_copies(fresh_db):
+def test_one_rule_per_pattern(tmp_path):
+    """Copies saved by older versions are folded into the latest, and the
+    database refuses new copies."""
+    import sqlite3
+
+    import pytest
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import sessionmaker
+
+    from app import migrations
     from app.models import CategoryRule
     from app.routers.transactions import create_rule
     from app.schemas import RuleCreate
 
-    fresh_db.add_all(
-        [
-            CategoryRule(pattern="example gym", category="Shopping", priority=50),
-            CategoryRule(pattern="example gym", category="Shopping", priority=100),
-        ]
+    path = tmp_path / "rules.db"
+    raw = sqlite3.connect(path)  # as an older version left it: no constraint, two copies
+    raw.execute(
+        "CREATE TABLE category_rules (id INTEGER PRIMARY KEY, pattern VARCHAR(160), match_type VARCHAR(16), "
+        "field VARCHAR(16), category VARCHAR(48), priority INTEGER, created_at DATETIME)"
     )
-    fresh_db.commit()
-    create_rule(RuleCreate(pattern="Example Gym", category="Health & Fitness", apply_now=False), db=fresh_db)
-    rules = fresh_db.scalars(select(CategoryRule)).all()
-    assert [(r.category, r.priority) for r in rules] == [("Health & Fitness", 100)]
+    raw.executemany(
+        "INSERT INTO category_rules (pattern, match_type, field, category, priority, created_at) "
+        "VALUES ('example gym', 'contains', 'merchant', ?, ?, '2026-01-01')",
+        [("Shopping", 50), ("Gifts", 100)],
+    )
+    raw.execute("PRAGMA user_version = 4")
+    raw.commit()
+    raw.close()
+
+    engine = create_engine(f"sqlite:///{path.as_posix()}")
+    migrations.migrate(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    assert [(r.category, r.priority) for r in db.scalars(select(CategoryRule))] == [("Gifts", 100)]
+
+    create_rule(RuleCreate(pattern="Example Gym", category="Health & Fitness", apply_now=False), db=db)
+    assert [r.category for r in db.scalars(select(CategoryRule))] == ["Health & Fitness"]
+    db.add(CategoryRule(pattern="example gym", match_type="contains", field="merchant", category="Shopping"))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.close()
+    engine.dispose()
