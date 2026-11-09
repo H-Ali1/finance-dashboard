@@ -249,7 +249,7 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
     # Strictly ahead of any other rule on this exact name, so your choice wins.
     others = db.scalar(
         select(func.min(CategoryRule.priority)).where(
-            CategoryRule.pattern == key,
+            func.lower(CategoryRule.pattern) == key,  # regex rules keep their case
             or_(CategoryRule.field != "merchant", CategoryRule.match_type != match_type),
         )
     )
