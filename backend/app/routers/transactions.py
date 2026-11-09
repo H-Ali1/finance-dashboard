@@ -147,15 +147,21 @@ def list_rules(db: Session = Depends(get_db)) -> dict:
 @router.post("/rules")
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
     pattern = payload.pattern.strip()
-    rule = CategoryRule(
-        # A regex keeps its case: lower-casing would turn \S into \s.
-        pattern=pattern if payload.match_type == "regex" else pattern.lower(),
-        match_type=payload.match_type,
-        field=payload.field,
-        category=payload.category,
-        priority=payload.priority,
+    # A regex keeps its case: lower-casing would turn \S into \s.
+    pattern = pattern if payload.match_type == "regex" else pattern.lower()
+    # The same rule saved twice is one rule: its category is updated instead.
+    rule = db.scalar(
+        select(CategoryRule).where(
+            CategoryRule.pattern == pattern,
+            CategoryRule.match_type == payload.match_type,
+            CategoryRule.field == payload.field,
+        )
     )
-    db.add(rule)
+    if rule is None:
+        rule = CategoryRule(pattern=pattern, match_type=payload.match_type, field=payload.field)
+        db.add(rule)
+    rule.category = payload.category
+    rule.priority = payload.priority
     db.commit()
     changed = recategorise_all(db) if payload.apply_now else 0
     return {"id": rule.id, "recategorised": changed}

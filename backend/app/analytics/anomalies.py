@@ -147,3 +147,50 @@ def detect_double_charges(db: Session, window_days: int = 3) -> list[dict]:
                     }
                 )
     return sorted(out, key=lambda r: r["dates"][-1], reverse=True)
+
+
+def detect_duplicate_accounts(db: Session, days: int = 180, min_matches: int = 10) -> list[dict]:
+    """Two accounts holding the same transactions: usually one bank both
+    imported from a statement and connected live. Its spending would count
+    twice. Matched on amount, within two days (statements and feeds can
+    date a payment differently)."""
+    since = dt.date.today() - dt.timedelta(days=days)
+    accounts = {a.id: a for a in account_map(db).values() if a.is_active}
+    by_account: dict[int, dict[int, list[dt.date]]] = defaultdict(lambda: defaultdict(list))
+    for txn in load_transactions(db, start=since, include_transfers=True):
+        if txn.account_id in accounts:
+            by_account[txn.account_id][txn.amount_minor].append(txn.booked_on)
+
+    out = []
+    ids = sorted(by_account)
+    for i, a in enumerate(ids):
+        for b in ids[i + 1 :]:
+            shared = sum(
+                _matched(sorted(days_a), sorted(by_account[b].get(amount, [])))
+                for amount, days_a in by_account[a].items()
+            )
+            smaller = min(sum(map(len, by_account[a].values())), sum(map(len, by_account[b].values())))
+            if shared >= min_matches and shared * 2 >= smaller:
+                out.append(
+                    {
+                        "accounts": [accounts[a].name, accounts[b].name],
+                        "account_ids": [a, b],
+                        "shared": shared,
+                        "of": smaller,
+                    }
+                )
+    return out
+
+
+def _matched(days_a: list[dt.date], days_b: list[dt.date], within: int = 2) -> int:
+    """How many dates pair up one to one, each within `within` days."""
+    count = i = j = 0
+    while i < len(days_a) and j < len(days_b):
+        gap = (days_b[j] - days_a[i]).days
+        if abs(gap) <= within:
+            count, i, j = count + 1, i + 1, j + 1
+        elif gap > 0:
+            i += 1
+        else:
+            j += 1
+    return count

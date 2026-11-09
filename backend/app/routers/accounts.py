@@ -59,6 +59,8 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
         account.include_in_networth = payload.include_in_networth
     if payload.is_active is not None:
         account.is_active = payload.is_active
+        # Remembered, so the next sync doesn't count it again.
+        account.provider_meta = {**(account.provider_meta or {}), "hidden": not payload.is_active}
     if payload.flip_sign is not None:
         meta = dict(account.provider_meta or {})
         meta["flip_sign"] = payload.flip_sign

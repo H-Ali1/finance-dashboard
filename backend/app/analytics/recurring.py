@@ -16,7 +16,7 @@ from statistics import median
 from sqlalchemy.orm import Session
 
 from ..money import to_major
-from .common import account_map, is_spend, load_transactions, robust_stats
+from .common import account_map, is_spend, load_transactions, per_request, robust_stats
 
 LOOKBACK_DAYS = 420
 
@@ -180,6 +180,7 @@ def _key(txn) -> str:
     return txn.merchant_key or txn.merchant.lower()
 
 
+@per_request
 def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[dict]:
     start = dt.date.today() - dt.timedelta(days=lookback_days)
     txns = [t for t in load_transactions(db, start=start) if is_spend(t)]

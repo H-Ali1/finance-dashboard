@@ -30,7 +30,8 @@ export default function NetWorth() {
     "/api/networth/history?days=365",
     [version],
   );
-  const accounts = useApi<{ accounts: Account[] }>("/api/accounts", [version]);
+  // Including ones taken out of the totals, so they can be put back.
+  const accounts = useApi<{ accounts: Account[] }>("/api/accounts?include_inactive=true", [version]);
   const assets = useApi<{ assets: ManualAsset[] }>("/api/assets", [version]);
 
   if (nw.error) return <ErrorBanner message={nw.error} onRetry={nw.reload} />;
@@ -40,7 +41,7 @@ export default function NetWorth() {
   const series = history.data?.series ?? [];
   const change = history.data?.change ?? null;
   const t212Accounts = (accounts.data?.accounts ?? []).filter(
-    (a) => a.provider === "trading212" && a.holdings.length > 0,
+    (a) => a.provider === "trading212" && a.is_active && a.holdings.length > 0,
   );
 
   const refresh = () => setVersion((v) => v + 1);
@@ -196,6 +197,9 @@ export default function NetWorth() {
                 <th className="num">Balance</th>
                 <th>Updated</th>
                 <th className="num">In net worth</th>
+                <th className="num" title="Untick to leave a duplicate or closed account out of every total">
+                  Counted
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -230,6 +234,17 @@ export default function NetWorth() {
                         await api.patch(`/api/accounts/${account.id}`, {
                           include_in_networth: event.target.checked,
                         });
+                        refresh();
+                      }}
+                    />
+                  </td>
+                  <td className="num">
+                    <input
+                      type="checkbox"
+                      aria-label={`Count ${account.name} in spending and income`}
+                      checked={account.is_active}
+                      onChange={async (event) => {
+                        await api.patch(`/api/accounts/${account.id}`, { is_active: event.target.checked });
                         refresh();
                       }}
                     />

@@ -8,10 +8,13 @@ hand-writing a different GROUP BY for every view.
 from __future__ import annotations
 
 import calendar
+import copy
 import datetime as dt
+import functools
+import inspect
 from statistics import median
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from ..models import Account, Transaction
@@ -20,6 +23,36 @@ from ..services.categorise import INCOME_CATEGORIES, NOT_SPENDING_OR_INCOME
 EXCLUDED_FROM_SPEND = NOT_SPENDING_OR_INCOME
 # Categories that aren't spending: moving your own money, and income.
 NOT_SPENDING = NOT_SPENDING_OR_INCOME | INCOME_CATEGORIES
+
+
+_CACHE = "analytics_cache"
+
+
+@event.listens_for(Session, "after_commit")
+@event.listens_for(Session, "after_rollback")
+def _forget_cached(session: Session) -> None:
+    session.info.pop(_CACHE, None)
+
+
+def per_request(fn):
+    """Work a result out once per request (one database session), however
+    many views ask for it: one dashboard load wanted the same recurring
+    payments nine times. Any commit starts afresh, and every caller gets its
+    own copy to change."""
+
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(db: Session, *args, **kwargs):
+        cache = db.info.setdefault(_CACHE, {})
+        bound = signature.bind(db, *args, **kwargs)
+        bound.apply_defaults()  # cashflow(db) and cashflow(db, 12) are the same question
+        key = (fn.__module__, fn.__qualname__, tuple(list(bound.arguments.items())[1:]))
+        if key not in cache:
+            cache[key] = fn(db, *args, **kwargs)
+        return copy.deepcopy(cache[key])
+
+    return wrapper
 
 
 def month_key(day: dt.date) -> str:
@@ -52,7 +85,12 @@ def load_transactions(
     include_transfers: bool = False,
     include_pending: bool = True,
 ) -> list[Transaction]:
-    stmt = select(Transaction).where(Transaction.excluded.is_(False))
+    # Accounts taken out of the totals (a duplicate, a closed account) don't count.
+    stmt = (
+        select(Transaction)
+        .join(Account, Account.id == Transaction.account_id)
+        .where(Transaction.excluded.is_(False), Account.is_active.is_(True))
+    )
     if start:
         stmt = stmt.where(Transaction.booked_on >= start)
     if end:

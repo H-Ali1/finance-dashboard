@@ -16,6 +16,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -103,7 +104,12 @@ class Account(Base):
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    __table_args__ = (UniqueConstraint("account_id", "external_id", name="uq_txn_account_ext"),)
+    __table_args__ = (
+        # One row per bank transaction: the same transaction can't be stored twice.
+        UniqueConstraint("account_id", "external_id", name="uq_txn_account_ext"),
+        # "Newest transaction in this account", read before every sync.
+        Index("ix_transactions_account_booked", "account_id", "booked_on"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)

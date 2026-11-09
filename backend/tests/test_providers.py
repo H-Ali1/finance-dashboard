@@ -286,3 +286,39 @@ def test_reimporting_with_flip_corrects_signs_instead_of_duplicating(client):
     mine = [t for t in items if t["merchant"].lower().startswith(("greggs", "pret"))]
     assert sorted(t["amount"] for t in mine) == [-7.25, -4.5]
     assert {t["category"] for t in mine} == {"Eating Out"}  # re-categorised as spending
+
+
+# --- Starling limits ---------------------------------------------------------------
+class _Limited:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, path, params=None):
+        return httpx.Response(429, text="", request=httpx.Request("GET", "https://api.starlingbank.com" + path))
+
+
+def test_starling_rate_limit_waits_for_the_next_sync(fresh_db, monkeypatch):
+    from app.models import Connection
+    from app.services import sync as sync_service
+
+    monkeypatch.setattr(starling, "_client", lambda: _Limited())
+    result = sync_service.sync_starling(fresh_db)
+
+    assert "error" not in result and "limiting requests" in result["skipped"]
+    connection = fresh_db.query(Connection).filter_by(provider="starling").one()
+    assert connection.status == "linked"  # the token works; it's only throttled
+    assert "…" not in connection.last_error and "/api/" not in connection.last_error
+
+
+def test_starling_errors_leave_out_account_ids():
+    class _Broken(_Limited):
+        def get(self, path, params=None):
+            return httpx.Response(500, text="oops", request=httpx.Request("GET", "https://x" + path))
+
+    path = "/api/v2/feed/account/f6dac7c5-0000-4000-8000-000000000000/category/a1feb10b-0000-4000-8000-000000000000"
+    with pytest.raises(ProviderError) as err:
+        starling._get(_Broken(), path)
+    assert "f6dac7c5" not in str(err.value)

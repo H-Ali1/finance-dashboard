@@ -109,6 +109,11 @@ def run_maintenance() -> None:
             if saved:
                 _state["last_backup"] = saved.name
                 log.info("Daily backup saved: %s", saved.name)
+            db = SessionLocal()
+            try:
+                sync_service.prune_sync_logs(db)
+            finally:
+                db.close()
             backup.optimise()
     except Exception:
         log.exception("Daily backup/housekeeping failed; will retry")

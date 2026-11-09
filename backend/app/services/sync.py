@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import threading
+from collections import defaultdict
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -57,39 +58,36 @@ def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Conn
     account.available_minor = raw.available_minor
     account.institution_name = raw.institution_name or (connection.institution_name if connection else "")
     account.balance_updated_at = _now()
-    account.is_active = True
     if connection is not None:
         account.connection_id = connection.id
     # Preserve user-set flags (e.g. flip_sign) while refreshing provider fields.
     meta = dict(account.provider_meta or {})
     meta.update(raw.meta)
     account.provider_meta = meta
+    # Back in use when the bank sends it, unless you've taken it out of the totals.
+    account.is_active = not meta.get("hidden")
     db.flush()
     return account
 
 
-# Rows saved before payment types were kept (schema v3) get theirs from one
-# longer read: as far back as each provider allows without asking you again.
-TYPE_BACKFILL_DAYS = {"starling": DEFAULT_LOOKBACK_DAYS, "truelayer": truelayer.HISTORY_DAYS[-1]}
-
-
 def _since_for(db: Session, account: Account) -> dt.date:
+    """Where the next read starts: only what's new. A few days are read again
+    because banks settle pending payments late, and so is any payment still
+    pending, so it can settle or drop off. That's still one request."""
     latest = db.scalar(select(func.max(Transaction.booked_on)).where(Transaction.account_id == account.id))
-    today = dt.date.today()
     if not latest:
-        return today - dt.timedelta(days=DEFAULT_LOOKBACK_DAYS)
+        return dt.date.today() - dt.timedelta(days=DEFAULT_LOOKBACK_DAYS)
     since = latest - dt.timedelta(days=OVERLAP_DAYS)
-    backfill = TYPE_BACKFILL_DAYS.get(account.provider)
-    if backfill and not (account.provider_meta or {}).get("payment_types"):
-        since = min(since, today - dt.timedelta(days=backfill))
-    return since
+    oldest_pending = db.scalar(
+        select(func.min(Transaction.booked_on)).where(
+            Transaction.account_id == account.id, Transaction.status == "pending"
+        )
+    )
+    return min(since, oldest_pending) if oldest_pending else since
 
 
-def _mark_read(db: Session, account: Account) -> None:
-    """This account's rows now carry payment types; no more long reads."""
-    if not (account.provider_meta or {}).get("payment_types"):
-        account.provider_meta = {**(account.provider_meta or {}), "payment_types": True}
-        db.commit()
+def _fingerprint(booked_on: dt.date, amount_minor: int, description: str) -> tuple:
+    return booked_on, amount_minor, " ".join((description or "").lower().split())
 
 
 def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction]) -> int:
@@ -98,10 +96,32 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
     rules = _rules(db)
     existing = {t.external_id: t for t in db.scalars(select(Transaction).where(Transaction.account_id == account.id))}
 
+    # Stored rows the bank now sends under a new ID (TrueLayer issues new IDs
+    # when a bank without stable ones is connected again): matched one to one
+    # by date, amount and description, so they're updated, not added again.
+    sent = {raw.external_id for raw in raws}
+    earliest = min(raw.booked_on for raw in raws)
+    renamed: dict[tuple, list[Transaction]] = defaultdict(list)
+    for txn in existing.values():
+        if txn.external_id not in sent and txn.booked_on >= earliest:
+            renamed[_fingerprint(txn.booked_on, txn.amount_minor, txn.description)].append(txn)
+
     added = 0
     for raw in raws:
         merchant_key = normalise_merchant(raw.merchant or raw.description)
         txn = existing.get(raw.external_id)
+        if txn is None and (same := renamed.get(_fingerprint(raw.booked_on, raw.amount_minor, raw.description))):
+            txn = same.pop(0)
+            existing.pop(txn.external_id, None)
+            txn.external_id = raw.external_id
+            existing[raw.external_id] = txn
+        if raw.status == "reversed":
+            # The bank cancelled it (a declined or reversed card payment):
+            # a pending copy stored earlier must not count as spending.
+            if txn is not None:
+                db.delete(txn)
+                existing.pop(raw.external_id, None)
+            continue
         if txn is not None:
             # A pending row that settled, a statement re-imported with its
             # signs corrected, or an older row the bank now describes more
@@ -155,6 +175,19 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
     return added
 
 
+SYNC_LOG_KEEP_DAYS = 90
+
+
+def prune_sync_logs(db: Session, keep_days: int = SYNC_LOG_KEEP_DAYS) -> int:
+    """The sync history only needs recent months; it grows by a few rows a day."""
+    cutoff = _now() - dt.timedelta(days=keep_days)
+    old = list(db.scalars(select(SyncLog).where(SyncLog.started_at < cutoff)))
+    for entry in old:
+        db.delete(entry)
+    db.commit()
+    return len(old)
+
+
 def _log(db: Session, provider: str, connection: Connection | None) -> SyncLog:
     entry = SyncLog(provider=provider, connection_id=connection.id if connection else None)
     db.add(entry)
@@ -191,13 +224,20 @@ def sync_starling(db: Session) -> dict:
             account = upsert_account(db, "starling", raw, connection)
             txns = starling.fetch_transactions(raw, _since_for(db, account))
             added += upsert_transactions(db, account, txns)
-            _mark_read(db, account)
         connection.status = "linked"
         connection.last_synced_at = _now()
         connection.last_error = None
         db.commit()
         _finish(db, entry, "ok", accounts=len(raw_accounts), added=added)
         return {"provider": "starling", "accounts": len(raw_accounts), "transactions_added": added}
+    except starling.RateLimited as exc:
+        # Not a fault: the token works. Retrying sooner would only prolong the
+        # limit, so this waits for the next scheduled sync.
+        connection.status = "linked"
+        connection.last_error = str(exc)
+        db.commit()
+        _finish(db, entry, "ok", message=str(exc))
+        return {"provider": "starling", "skipped": str(exc)}
     except ProviderError as exc:
         connection.status = "error"
         connection.last_error = str(exc)
@@ -278,7 +318,6 @@ def sync_truelayer(
             account = upsert_account(db, "truelayer", raw, connection)
             txns = truelayer.fetch_transactions(tokens.access_token, raw, _since_for(db, account), psu_ip)
             added += upsert_transactions(db, account, txns)
-            _mark_read(db, account)
         connection.status = "linked"
         connection.last_synced_at = _now()
         connection.last_error = None

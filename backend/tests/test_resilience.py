@@ -76,6 +76,13 @@ def test_version_1_database_gains_the_bank_link_columns(tmp_path):
         assert check.exec_driver_sql("SELECT provider FROM connections").scalar() == "starling"
 
 
+def test_upgraded_database_gains_the_account_date_index(tmp_path):
+    engine = _engine(tmp_path / "idx.db")
+    migrations.migrate(engine)
+    indexes = {i["name"] for i in inspect(engine).get_indexes("transactions")}
+    assert "ix_transactions_account_booked" in indexes
+
+
 def test_database_from_a_newer_build_is_refused(tmp_path):
     engine = _engine(tmp_path / "future.db")
     with engine.begin() as conn:

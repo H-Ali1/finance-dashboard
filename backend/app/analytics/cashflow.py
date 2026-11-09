@@ -17,6 +17,7 @@ from .common import (
     month_bounds,
     month_key,
     month_keys_back,
+    per_request,
     project_month_total,
     spend_value,
 )
@@ -53,6 +54,7 @@ def _median(values: list[int]) -> int:
     return int(median(values)) if values else 0
 
 
+@per_request
 def cashflow(db: Session, months: int = 12) -> dict:
     recurring_items = detect_recurring(db)
     fixed_keys = recurring_keys(recurring_items)
