@@ -11,13 +11,18 @@ from sqlalchemy.orm import Session
 
 from ..money import to_major
 from .common import account_map, is_spend, load_transactions, robust_stats
-from .recurring import detect_recurring, recurring_keys
+from .recurring import SCHEDULED_TYPES, detect_recurring, payee, recurring_keys
 
 BASELINE_DAYS = 365
 RECENT_DAYS = 45
 # Below this, "unusual" is just noise.
 MIN_FLAG_MINOR = 3000  # £30
 Z_THRESHOLD = 4.0
+# Where "your typical spend in this category" means nothing: a grab-bag, or
+# money that goes out at the same size every month by design.
+NO_BASELINE = {"Uncategorised", "Rent & Mortgage"}
+# Rent is due whatever the month looks like; it's never "unusual".
+NEVER_UNUSUAL = {"Rent & Mortgage"}
 
 
 def _score(amount: float, med: float, mad: float) -> float:
@@ -32,18 +37,22 @@ def detect_anomalies(db: Session, recent_days: int = RECENT_DAYS) -> list[dict]:
     txns = [t for t in load_transactions(db, start=baseline_start) if is_spend(t)]
     accounts = account_map(db)
     # Rent is much larger than your average "bills" transaction every single
-    # month — expected, so it must not be reported as an anomaly.
-    scheduled = recurring_keys(detect_recurring(db))
+    # month — expected, so it must not be reported as an anomaly. Bills that
+    # have stopped count too: a payment means one has started again.
+    known = recurring_keys(detect_recurring(db), include_stopped=True)
+    known_payees = {payee(k) for k in known}
 
     by_category: dict[str, list[float]] = defaultdict(list)
+    by_merchant: dict[str, list] = defaultdict(list)
     seen_merchants: dict[str, dt.date] = {}
     for txn in txns:
         by_category[txn.category].append(float(-txn.amount_minor))
         key = txn.merchant_key or txn.merchant.lower()
+        by_merchant[payee(key)].append(txn)
         if key and (key not in seen_merchants or txn.booked_on < seen_merchants[key]):
             seen_merchants[key] = txn.booked_on
 
-    stats = {cat: robust_stats(vals) for cat, vals in by_category.items() if len(vals) >= 6}
+    stats = {cat: robust_stats(vals) for cat, vals in by_category.items() if len(vals) >= 6 and cat not in NO_BASELINE}
 
     out: list[dict] = []
     for txn in txns:
@@ -53,7 +62,9 @@ def detect_anomalies(db: Session, recent_days: int = RECENT_DAYS) -> list[dict]:
         if amount < MIN_FLAG_MINOR:
             continue
         key = txn.merchant_key or txn.merchant.lower()
-        if key in scheduled:
+        if txn.category in NEVER_UNUSUAL or key in known or payee(key) in known_payees:
+            continue
+        if _repeats_earlier_payment(txn, by_merchant[payee(key)]):
             continue
 
         reasons = []
@@ -91,6 +102,20 @@ def detect_anomalies(db: Session, recent_days: int = RECENT_DAYS) -> list[dict]:
 
     out.sort(key=lambda r: r["amount"], reverse=True)
     return out
+
+
+def _repeats_earlier_payment(txn, same_payee: list) -> bool:
+    """A standing order or direct debit for about what the same payee took
+    last time, about a cadence ago: the start of a pattern, not a surprise."""
+    if txn.payment_type not in SCHEDULED_TYPES:
+        return False
+    amount = -txn.amount_minor
+    for earlier in same_payee:
+        gap = (txn.booked_on - earlier.booked_on).days
+        # Within 10%, in whole pence.
+        if 6 <= gap <= 380 and abs(-earlier.amount_minor - amount) * 10 <= amount:
+            return True
+    return False
 
 
 def detect_double_charges(db: Session, window_days: int = 3) -> list[dict]:

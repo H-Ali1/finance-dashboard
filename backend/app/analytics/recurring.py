@@ -54,118 +54,217 @@ def _classify_cadence(median_gap: float) -> tuple[str, float] | None:
     return None
 
 
-def _service_family(merchant_key: str) -> str:
+def service_family(merchant_key: str) -> str:
     """Collapse 'apple com bill' / 'apple services' onto one family for dupe checks."""
     words = [w for w in merchant_key.split() if len(w) > 2]
     return " ".join(words[:2]) if words else merchant_key
+
+
+def payee(merchant_key: str) -> str:
+    """Who a payment went to, for joining names that drift ("example homes",
+    "example homes flat b"). Two words at least: one is often only a
+    surname ("m khan" and "a khan" are different people)."""
+    family = service_family(merchant_key)
+    return family if len(family.split()) >= 2 else merchant_key
+
+
+# Payment types that are recurring by nature: you set them up to repeat.
+SCHEDULED_TYPES = {"standing_order", "direct_debit"}
+
+
+def _is_scheduled(rows: list) -> bool:
+    """Set up to repeat: a standing order or direct debit, or rent."""
+    latest = rows[-1]
+    return latest.payment_type in SCHEDULED_TYPES or latest.category == "Rent & Mortgage"
+
+
+def _detect_group(rows: list, accounts: dict, today: dt.date) -> dict | None:
+    """One merchant's payments, oldest first: a recurring item, or None."""
+    # Collapse same-day duplicates; a double charge shouldn't look like a cadence.
+    by_day: dict[dt.date, list] = defaultdict(list)
+    for txn in rows:
+        by_day[txn.booked_on].append(txn)
+    days = sorted(by_day)
+    amounts = [sum(-t.amount_minor for t in by_day[d]) for d in days]
+    # Three payments make a pattern. Two do when they were set up to repeat
+    # (a standing order, rent) and came to the same sum: often all a bank
+    # that only shares 89 days of history can show.
+    scheduled = _is_scheduled(rows)
+    if len(days) < 2 or (
+        len(days) == 2 and not (scheduled and abs(amounts[0] - amounts[1]) <= max(100, amounts[1] // 50))
+    ):
+        return None
+
+    gaps = [(b - a).days for a, b in pairwise(days)]
+    med_gap = median(gaps)
+    if med_gap < 6:
+        return None  # several times a week — a shop, not a subscription
+
+    gap_med, gap_mad = robust_stats([float(g) for g in gaps])
+    if gap_med and gap_mad / gap_med > 0.3:
+        return None  # too irregular to predict
+
+    cadence = _classify_cadence(med_gap)
+    if cadence is None:
+        return None
+    label, cadence_days = cadence
+
+    amt_med, amt_mad = robust_stats([float(a) for a in amounts])
+    if not amt_med:
+        return None
+    stable = (amt_mad / amt_med) <= 0.25 or len(set(amounts)) == 1
+    if not stable:
+        return None
+
+    sample = by_day[days[-1]][0]
+    if sample.category in _NOISY_CATEGORIES and len(set(amounts)) > 1:
+        return None
+
+    last_seen = days[-1]
+    due_on = last_seen + dt.timedelta(days=round(med_gap))
+    overdue_by = (today - due_on).days
+    grace = max(6, round(med_gap * 0.4))
+    status = "active"
+    if overdue_by > grace * 2:
+        status = "stopped"
+    elif overdue_by > grace:
+        status = "overdue"
+
+    recent = amounts[-1]
+    baseline = int(median(amounts[:-1])) if len(amounts) > 1 else recent
+    price_change = None
+    if baseline and abs(recent - baseline) >= max(50, baseline * 0.02):
+        price_change = {
+            "from": to_major(baseline),
+            "to": to_major(recent),
+            "pct": round((recent - baseline) / baseline * 100, 1),
+            "direction": "up" if recent > baseline else "down",
+            # What the rise costs you over a year if it sticks.
+            "annual_impact": to_major(int((recent - baseline) * (365 / cadence_days))),
+        }
+
+    key = _key(sample)
+    account = accounts.get(sample.account_id)
+    is_bill = sample.category in _BILL_CATEGORIES or (
+        sample.category == "Uncategorised" and sample.payment_type == "standing_order"
+    )
+    return {
+        "merchant": sample.merchant,
+        "merchant_key": key,
+        # Every name it has gone by: payees change, and so do references.
+        "merchant_keys": sorted({_key(t) for t in rows}),
+        "family": service_family(key),
+        "category": sample.category,
+        "type": "bill" if is_bill else "subscription",
+        "cadence": label,
+        "cadence_days": round(med_gap, 1),
+        "amount": to_major(recent),
+        "typical_amount": to_major(int(amt_med)),
+        "annual_cost": to_major(int(amt_med * (365 / cadence_days))),
+        "monthly_cost": to_major(int(amt_med * (30.44 / cadence_days))),
+        "occurrences": len(days),
+        "first_seen": days[0].isoformat(),
+        "last_seen": last_seen.isoformat(),
+        "next_expected": due_on.isoformat(),
+        "days_until_due": (due_on - today).days,
+        "status": status,
+        "price_change": price_change,
+        "account": account.name if account else "",
+        "account_id": sample.account_id,
+        "institution": account.institution_name if account else "",
+        "total_paid": to_major(sum(amounts)),
+    }
+
+
+def _key(txn) -> str:
+    return txn.merchant_key or txn.merchant.lower()
 
 
 def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[dict]:
     start = dt.date.today() - dt.timedelta(days=lookback_days)
     txns = [t for t in load_transactions(db, start=start) if is_spend(t)]
     accounts = account_map(db)
+    today = dt.date.today()
 
     # Grouped per account, not per merchant: the same service billed on two
     # cards is two subscriptions (and worth flagging), not one erratic one.
     groups: dict[tuple[int, str], list] = defaultdict(list)
     for txn in txns:
-        key = txn.merchant_key or txn.merchant.lower()
-        if key:
+        if key := _key(txn):
             groups[(txn.account_id, key)].append(txn)
 
-    today = dt.date.today()
-    found: list[dict] = []
-
+    found: list[tuple[dict, list]] = []
+    # What isn't a pattern under one name at one bank may be under several:
+    # "EXAMPLE HOMES" and "EXAMPLE HOMES FLAT B", paid from Starling one
+    # month and HSBC the next. Those are tried again by payee, across banks.
+    unmatched: dict[str, list[list]] = defaultdict(list)
     for (_account_id, key), rows in groups.items():
         rows.sort(key=lambda t: t.booked_on)
-        # Collapse same-day duplicates; a double charge shouldn't look like a cadence.
-        by_day: dict[dt.date, list] = defaultdict(list)
-        for txn in rows:
-            by_day[txn.booked_on].append(txn)
-        days = sorted(by_day)
-        if len(days) < 3:
+        if item := _detect_group(rows, accounts, today):
+            found.append((item, rows))
+        else:
+            unmatched[payee(key)].append(rows)
+
+    for parts in unmatched.values():
+        if len(parts) < 2:
+            continue  # nothing to join it with
+        # Every bank together when one took over from another; otherwise
+        # (one service on two cards at once) each bank's names on their own.
+        by_bank: dict[int, list[list]] = defaultdict(list)
+        for part in parts:
+            by_bank[part[0].account_id].append(part)
+        if _one_bank_at_a_time(parts):
+            rows = sorted((t for part in parts for t in part), key=lambda t: t.booked_on)
+            if item := _detect_group(rows, accounts, today):
+                found.append((item, rows))
+                continue
+        if len(by_bank) < 2:
             continue
+        for bank in by_bank.values():
+            if len(bank) < 2:
+                continue
+            rows = sorted((t for part in bank for t in part), key=lambda t: t.booked_on)
+            if item := _detect_group(rows, accounts, today):
+                found.append((item, rows))
 
-        gaps = [(b - a).days for a, b in pairwise(days)]
-        med_gap = median(gaps)
-        if med_gap < 6:
-            continue  # several times a week — a shop, not a subscription
+    items = _join_handovers(found, accounts, today)
+    items.sort(key=lambda r: r["annual_cost"], reverse=True)
+    _flag_duplicates(items)
+    return items
 
-        gap_med, gap_mad = robust_stats([float(g) for g in gaps])
-        if gap_med and gap_mad / gap_med > 0.3:
-            continue  # too irregular to predict
 
-        cadence = _classify_cadence(med_gap)
-        if cadence is None:
-            continue
-        label, cadence_days = cadence
+def _one_bank_at_a_time(parts: list[list]) -> bool:
+    """Names can alternate at one bank, but a second bank must take over
+    after the first stops: paid from two at once is two payments."""
+    days: dict[int, list[dt.date]] = defaultdict(list)
+    for part in parts:
+        days[part[0].account_id].extend(t.booked_on for t in part)
+    spans = sorted((min(d), max(d)) for d in days.values())
+    return all(later[0] > earlier[1] for earlier, later in pairwise(spans))
 
-        amounts = [sum(-t.amount_minor for t in by_day[d]) for d in days]
-        amt_med, amt_mad = robust_stats([float(a) for a in amounts])
-        if not amt_med:
-            continue
-        stable = (amt_mad / amt_med) <= 0.25 or len(set(amounts)) == 1
-        if not stable:
-            continue
 
-        sample = by_day[days[-1]][0]
-        if sample.category in _NOISY_CATEGORIES and len(set(amounts)) > 1:
-            continue
+def _join_handovers(found: list[tuple[dict, list]], accounts: dict, today: dt.date) -> list[dict]:
+    """One payee found more than once, one after the other — the payee's name
+    changed, or you moved the payment to another bank — is one bill. Found
+    side by side (the same service on two cards) they stay apart, so the
+    duplicate can be flagged."""
+    by_family: dict[str, list[tuple[dict, list]]] = defaultdict(list)
+    for item, rows in found:
+        by_family[payee(item["merchant_key"])].append((item, rows))
 
-        last_seen = days[-1]
-        due_on = last_seen + dt.timedelta(days=round(med_gap))
-        overdue_by = (today - due_on).days
-        grace = max(6, round(med_gap * 0.4))
-        status = "active"
-        if overdue_by > grace * 2:
-            status = "stopped"
-        elif overdue_by > grace:
-            status = "overdue"
-
-        recent = amounts[-1]
-        baseline = int(median(amounts[:-1])) if len(amounts) > 1 else recent
-        price_change = None
-        if baseline and abs(recent - baseline) >= max(50, baseline * 0.02):
-            price_change = {
-                "from": to_major(baseline),
-                "to": to_major(recent),
-                "pct": round((recent - baseline) / baseline * 100, 1),
-                "direction": "up" if recent > baseline else "down",
-                # What the rise costs you over a year if it sticks.
-                "annual_impact": to_major(int((recent - baseline) * (365 / cadence_days))),
-            }
-
-        account = accounts.get(sample.account_id)
-        found.append(
-            {
-                "merchant": sample.merchant,
-                "merchant_key": key,
-                "family": _service_family(key),
-                "category": sample.category,
-                "type": "bill" if sample.category in _BILL_CATEGORIES else "subscription",
-                "cadence": label,
-                "cadence_days": round(med_gap, 1),
-                "amount": to_major(recent),
-                "typical_amount": to_major(int(amt_med)),
-                "annual_cost": to_major(int(amt_med * (365 / cadence_days))),
-                "monthly_cost": to_major(int(amt_med * (30.44 / cadence_days))),
-                "occurrences": len(days),
-                "first_seen": days[0].isoformat(),
-                "last_seen": last_seen.isoformat(),
-                "next_expected": due_on.isoformat(),
-                "days_until_due": (due_on - today).days,
-                "status": status,
-                "price_change": price_change,
-                "account": account.name if account else "",
-                "account_id": sample.account_id,
-                "institution": account.institution_name if account else "",
-                "total_paid": to_major(sum(amounts)),
-            }
+    out: list[dict] = []
+    for entries in by_family.values():
+        entries.sort(key=lambda e: e[0]["first_seen"])
+        one_after_another = all(
+            later["first_seen"] > earlier["last_seen"] for (earlier, _), (later, _) in pairwise(entries)
         )
-
-    found.sort(key=lambda r: r["annual_cost"], reverse=True)
-    _flag_duplicates(found)
-    return found
+        if len(entries) > 1 and one_after_another:
+            rows = sorted((t for _, part in entries for t in part), key=lambda t: t.booked_on)
+            if joined := _detect_group(rows, accounts, today):
+                out.append(joined)
+                continue
+        out.extend(item for item, _ in entries)
+    return out
 
 
 def _flag_duplicates(items: list[dict]) -> None:
@@ -207,10 +306,11 @@ def summary(items: list[dict]) -> dict:
     }
 
 
-def recurring_keys(items: list[dict]) -> set[str]:
+def recurring_keys(items: list[dict], *, include_stopped: bool = False) -> set[str]:
     """Merchant keys that bill you on a schedule — used to separate fixed
     commitments from discretionary spending in projections and anomalies."""
-    return {i["merchant_key"] for i in items if i["status"] in {"active", "overdue"}}
+    statuses = {"active", "overdue", "stopped"} if include_stopped else {"active", "overdue"}
+    return {key for i in items if i["status"] in statuses for key in i.get("merchant_keys", [i["merchant_key"]])}
 
 
 def upcoming(items: list[dict], days: int = 30) -> list[dict]:
