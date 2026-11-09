@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Account, CategoryRule, Connection, SyncLog, Transaction
 from ..providers import ProviderError, RawAccount, RawTransaction, starling, trading212, truelayer
+from . import income
 from .categorise import categorise, display_merchant, normalise_merchant
 from .transfers import detect_transfers
 
@@ -332,6 +333,7 @@ def connect_truelayer(db: Session, code: str, *, psu_ip: str | None = None) -> d
     with SYNC_LOCK:
         result = sync_truelayer(db, connection, psu_ip=psu_ip, tokens=tokens)
         detect_transfers(db)
+        recategorise_all(db)
         from ..analytics.networth import snapshot_networth  # local import avoids a cycle
 
         snapshot_networth(db)
@@ -395,19 +397,30 @@ def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, s
     )
 
 
+def categorise_one(db: Session, txn: Transaction) -> str:
+    """The category a transaction would get by itself, under your rules."""
+    return _categorise_row(txn, _rules(db))[0]
+
+
 def recategorise_all(db: Session, *, include_manual: bool = False) -> int:
-    """Re-run categorisation, e.g. after adding a rule."""
+    """Re-run categorisation, e.g. after adding a rule. Money in then gets a
+    second look with the whole history in view (salary, tutoring, you)."""
     rules = _rules(db)
+    rows = list(db.scalars(select(Transaction)))
+    proposals = {
+        txn.id: _categorise_row(txn, rules)
+        for txn in rows
+        if not txn.is_transfer and (include_manual or txn.category_source != "manual")
+    }
+    income.refine(rows, proposals, {a.id: a for a in db.scalars(select(Account))})
+
     changed = 0
-    for txn in db.scalars(select(Transaction)):
-        if txn.category_source == "manual" and not include_manual:
+    for txn in rows:
+        if txn.id not in proposals:
             continue
-        if txn.is_transfer:
-            continue
-        category, source = _categorise_row(txn, rules)
-        if category != txn.category:
-            txn.category = category
-            txn.category_source = source
-            changed += 1
+        category, source = proposals[txn.id]
+        if (category, source) != (txn.category, txn.category_source):
+            changed += category != txn.category
+            txn.category, txn.category_source = category, source
     db.commit()
     return changed

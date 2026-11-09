@@ -15,8 +15,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Account, Transaction
+from ..services.categorise import INCOME_CATEGORIES, NOT_SPENDING_OR_INCOME
 
-EXCLUDED_FROM_SPEND = {"Transfers", "Savings & Investments"}
+EXCLUDED_FROM_SPEND = NOT_SPENDING_OR_INCOME
+# Categories that aren't spending: moving your own money, and income.
+NOT_SPENDING = NOT_SPENDING_OR_INCOME | INCOME_CATEGORIES
 
 
 def month_key(day: dt.date) -> str:
@@ -62,16 +65,32 @@ def load_transactions(
 
 
 def is_spend(txn: Transaction) -> bool:
-    return txn.amount_minor < 0 and txn.category not in EXCLUDED_FROM_SPEND
+    """A payment out, for spending. Per-payment checks (recurring bills,
+    unusual payments) look at these."""
+    return txn.amount_minor < 0 and txn.category not in NOT_SPENDING
+
+
+def is_refund(txn: Transaction) -> bool:
+    """Money back from somewhere you spend: it keeps that category."""
+    return txn.amount_minor > 0 and txn.category not in NOT_SPENDING
+
+
+def spend_value(txn: Transaction) -> int:
+    """What a transaction adds to spending, in pence: a payment adds, a
+    refund takes away, income and your own transfers count for nothing.
+    Totals use this, so a returned purchase isn't spending or income."""
+    return 0 if txn.category in NOT_SPENDING else -txn.amount_minor
 
 
 def is_income(txn: Transaction) -> bool:
-    return txn.amount_minor > 0 and txn.category not in EXCLUDED_FROM_SPEND
+    """Money in that was earned or given: not a refund, not your own money
+    coming back from another account."""
+    return txn.amount_minor > 0 and txn.category in INCOME_CATEGORIES
 
 
 def spend_minor(txns) -> int:
-    """Positive number: how much went out."""
-    return sum(-t.amount_minor for t in txns if is_spend(t))
+    """Positive number: how much went out, less refunds."""
+    return sum(spend_value(t) for t in txns)
 
 
 def income_minor(txns) -> int:

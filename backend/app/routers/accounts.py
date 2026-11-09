@@ -11,6 +11,8 @@ from ..db import get_db
 from ..models import Account, ManualAsset
 from ..money import to_major, to_minor
 from ..schemas import AccountUpdate, ManualAssetUpsert
+from ..services.income import INCOME_DEFAULT_KEY, INCOME_DEFAULTS
+from ..services.sync import recategorise_all
 
 router = APIRouter(prefix="/api", tags=["accounts"])
 
@@ -29,6 +31,7 @@ def _serialise_account(account: Account) -> dict:
         "include_in_networth": account.include_in_networth,
         "is_active": account.is_active,
         "flip_sign": bool((account.provider_meta or {}).get("flip_sign")),
+        "income_default": (account.provider_meta or {}).get(INCOME_DEFAULT_KEY),
         "updated_at": account.balance_updated_at.isoformat() if account.balance_updated_at else None,
         "holdings": (account.provider_meta or {}).get("holdings") or [],
     }
@@ -60,7 +63,17 @@ def update_account(account_id: int, payload: AccountUpdate, db: Session = Depend
         meta = dict(account.provider_meta or {})
         meta["flip_sign"] = payload.flip_sign
         account.provider_meta = meta
+    recategorise = False
+    if payload.income_default is not None:
+        if payload.income_default and payload.income_default not in INCOME_DEFAULTS:
+            raise HTTPException(status_code=400, detail=f"income_default must be one of {sorted(INCOME_DEFAULTS)}")
+        meta = dict(account.provider_meta or {})
+        meta[INCOME_DEFAULT_KEY] = payload.income_default or None
+        account.provider_meta = meta
+        recategorise = True
     db.commit()
+    if recategorise:
+        recategorise_all(db)
     return _serialise_account(account)
 
 

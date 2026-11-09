@@ -16,6 +16,10 @@ class AccountUpdate(BaseModel):
         default=None,
         description="Set when a provider reports spend as positive (some card issuers do).",
     )
+    income_default: str | None = Field(
+        default=None,
+        description='"Tutoring": bank transfers from people into this account are tutoring. "" turns it off.',
+    )
 
 
 class TransactionUpdate(BaseModel):

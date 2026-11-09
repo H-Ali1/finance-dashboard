@@ -21,7 +21,7 @@ from app.db import Base, SessionLocal, engine, init_db
 from app.models import Budget, Connection, ManualAsset, NetWorthSnapshot
 from app.money import to_minor
 from app.providers.base import RawAccount, RawTransaction
-from app.services.sync import upsert_account, upsert_transactions
+from app.services.sync import recategorise_all, upsert_account, upsert_transactions
 from app.services.transfers import detect_transfers
 
 random.seed(20260802)
@@ -91,6 +91,13 @@ def build() -> dict[str, list[RawTransaction]]:
         add("starling-demo-current", start.replace(day=25), salary, "ACME SOFTWARE LTD SALARY")
         if index % 4 == 2:
             add("starling-demo-current", start.replace(day=14), 420.00, "FREELANCE INVOICE PAYMENT")
+        # --- tutoring: students pay into HSBC by bank transfer ----------------
+        for week in range(4):
+            add("hsbc-demo-current", start.replace(day=2 + week * 7), 35.00, "MRS A PATEL AYAAN MATHS")
+        for day in (6, 20):
+            add("hsbc-demo-current", start.replace(day=day), 40.00, "J OKAFOR")
+        if index >= MONTHS - 5:  # a new student five months ago
+            add("hsbc-demo-current", start.replace(day=11), 45.00, "S WRIGHT GCSE PHYSICS")
 
         # --- fixed outgoings --------------------------------------------------
         add("starling-demo-current", start.replace(day=1), -1150.00, "RENT PAYMENT LANDLORD")
@@ -190,7 +197,14 @@ def seed(reset_first: bool = False, verbose: bool = True) -> None:
                 kind=kind,
                 balance_minor=balance,
                 institution_name=institution,
-                meta={"holdings": _demo_holdings()} if provider == "trading212" else {},
+                meta=(
+                    {"holdings": _demo_holdings()}
+                    if provider == "trading212"
+                    # Where the demo's students pay: the Income tab's tutoring account.
+                    else {"income_default": "Tutoring"}
+                    if external_id == "hsbc-demo-current"
+                    else {}
+                ),
             )
             account = upsert_account(db, provider, raw, connections.get(institution))
             added = upsert_transactions(db, account, data.get(external_id, []))
@@ -216,6 +230,7 @@ def seed(reset_first: bool = False, verbose: bool = True) -> None:
         db.commit()
 
         pairs = detect_transfers(db)
+        recategorise_all(db)
         if verbose:
             print(f"  transfer pairs matched: {pairs}")
 

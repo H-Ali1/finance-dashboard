@@ -220,6 +220,8 @@ export interface Account {
   include_in_networth: boolean;
   is_active: boolean;
   flip_sign: boolean;
+  /** "Tutoring" when bank transfers from people into this account are tutoring. */
+  income_default: string | null;
   updated_at: string | null;
   holdings: {
     ticker: string;
@@ -231,6 +233,49 @@ export interface Account {
     value: number;
     ppl: number;
   }[];
+}
+
+export interface IncomeSource {
+  source: string;
+  label: string;
+  this_month: number;
+  this_month_payments: number;
+  typical: number;
+  average: number;
+  total: number;
+  months_paid: number;
+  months_counted: number;
+  regularity: string;
+  variation_pct: number | null;
+  payday: number | null;
+  payments_per_month: number;
+  payers_per_month: number;
+  payers: number;
+  trend: { recent: number; previous: number; change_pct: number | null; direction: "up" | "down" | "steady" | null };
+  series: { month: string; total: number; payments: number; payers: number }[];
+}
+
+export interface IncomePayer {
+  merchant_key: string;
+  payer: string;
+  source: string;
+  source_set_by: string;
+  last_date: string;
+  last_amount: number;
+  payments: number;
+  total: number;
+  months: number;
+  accounts: string[];
+}
+
+export interface IncomeBreakdown {
+  months: string[];
+  current_month: string;
+  sources: IncomeSource[];
+  total: { this_month: number; typical: number };
+  series: Record<string, number | string>[];
+  not_income: { refunds_this_month: number; own_money_this_month: number; refunds: number; own_money: number };
+  payers: IncomePayer[];
 }
 
 export interface ManualAsset {

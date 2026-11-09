@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..analytics import anomalies as anomalies_mod
 from ..analytics import cashflow as cashflow_mod
+from ..analytics import income as income_mod
 from ..analytics import insights as insights_mod
 from ..analytics import recurring as recurring_mod
 from ..analytics import spending as spending_mod
@@ -117,6 +118,12 @@ def cashflow(months: int = 6, db: Session = Depends(get_db)) -> dict:
     data.pop("_minor", None)
     data["burn"] = cashflow_mod.daily_burn(db, 60)["series"]
     return data
+
+
+@router.get("/income")
+def income(months: int = 12, db: Session = Depends(get_db)) -> dict:
+    """Salary, tutoring and other income by month: how much, how regular, the trend."""
+    return income_mod.income_breakdown(db, min(max(months, 1), 36))
 
 
 @router.get("/anomalies")

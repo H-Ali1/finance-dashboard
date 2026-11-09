@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Cashflow from "./components/Cashflow";
 import Connections from "./components/Connections";
 import Dashboard from "./components/Dashboard";
+import Income from "./components/Income";
 import Insights from "./components/Insights";
 import NetWorth from "./components/NetWorth";
 import Spending from "./components/Spending";
@@ -17,6 +18,7 @@ const TABS = [
   { key: "insights", label: "Needs fixing" },
   { key: "spending", label: "Spending" },
   { key: "subscriptions", label: "Subscriptions" },
+  { key: "income", label: "Income" },
   { key: "cashflow", label: "Cash flow" },
   { key: "networth", label: "Net worth" },
   { key: "transactions", label: "Transactions" },
@@ -132,6 +134,7 @@ export default function App() {
             {tab === "insights" && <Insights />}
             {tab === "spending" && <Spending />}
             {tab === "subscriptions" && <Subscriptions />}
+            {tab === "income" && <Income />}
             {tab === "cashflow" && <Cashflow />}
             {tab === "networth" && <NetWorth />}
             {tab === "transactions" && <Transactions />}

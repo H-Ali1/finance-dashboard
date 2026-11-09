@@ -65,7 +65,7 @@ def test_keywords(description, expected):
 def test_income_words_only_count_for_money_in():
     assert _category("HMRC SELF ASSESSMENT", amount=-850) == "Tax"
     assert _category("HMRC TAX REFUND", amount=212.4) == "Income"
-    assert _category("ACME LTD SALARY", amount=2450) == "Income"
+    assert _category("ACME LTD SALARY", amount=2450) == "Salary"
 
 
 # --- the banks' own categories ------------------------------------------------------

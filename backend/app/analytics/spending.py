@@ -15,13 +15,13 @@ from .common import (
     account_map,
     days_in_month,
     is_income,
-    is_spend,
     load_transactions,
     month_bounds,
     month_key,
     month_keys_back,
     pct_change,
     project_month_total,
+    spend_value,
 )
 
 
@@ -30,9 +30,11 @@ def category_breakdown(db: Session, start: dt.date, end: dt.date) -> dict:
     totals: dict[str, int] = defaultdict(int)
     counts: dict[str, int] = defaultdict(int)
     for txn in txns:
-        if is_spend(txn):
-            totals[txn.category] += -txn.amount_minor
+        if value := spend_value(txn):
+            totals[txn.category] += value
             counts[txn.category] += 1
+    # A month where refunds outweigh spending in a category leaves nothing to show.
+    totals = {category: amount for category, amount in totals.items() if amount > 0}
 
     grand = sum(totals.values())
     rows = [
@@ -63,8 +65,8 @@ def monthly_trend(db: Session, months: int = 12) -> dict:
         key = month_key(txn.booked_on)
         if key not in buckets:
             continue
-        if is_spend(txn):
-            buckets[key]["spend"] += -txn.amount_minor
+        if value := spend_value(txn):
+            buckets[key]["spend"] += value
         elif is_income(txn):
             buckets[key]["income"] += txn.amount_minor
 
@@ -105,11 +107,12 @@ def category_trend(db: Session, months: int = 6, limit: int = 8) -> dict:
     to_date: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(keys, 0))
     for txn in txns:
         key = month_key(txn.booked_on)
-        if key not in full[txn.category] or not is_spend(txn):
+        value = spend_value(txn)
+        if key not in full[txn.category] or not value:
             continue
-        full[txn.category][key] += -txn.amount_minor
+        full[txn.category][key] += value
         if txn.booked_on.day <= cutoff_day:
-            to_date[txn.category][key] += -txn.amount_minor
+            to_date[txn.category][key] += value
 
     rows = []
     for category, by_month in full.items():
@@ -146,13 +149,14 @@ def top_merchants(db: Session, start: dt.date, end: dt.date, limit: int = 15) ->
     labels: dict[str, str] = {}
     categories: dict[str, str] = {}
     for txn in txns:
-        if not is_spend(txn):
+        if not (value := spend_value(txn)):
             continue
         key = txn.merchant_key or txn.merchant.lower()
-        totals[key] += -txn.amount_minor
+        totals[key] += value
         counts[key] += 1
         labels.setdefault(key, txn.merchant)
         categories.setdefault(key, txn.category)
+    totals = {key: amount for key, amount in totals.items() if amount > 0}
 
     rows = [
         {
@@ -176,8 +180,8 @@ def budget_status(db: Session, key: str | None = None) -> dict:
 
     spent: dict[str, int] = defaultdict(int)
     for txn in txns:
-        if is_spend(txn):
-            spent[txn.category] += -txn.amount_minor
+        if value := spend_value(txn):
+            spent[txn.category] += value
 
     total_days = days_in_month(key)
     elapsed = min(today.day, total_days) if month_key(today) == key else total_days
@@ -189,8 +193,8 @@ def budget_status(db: Session, key: str | None = None) -> dict:
     history: dict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(history_keys, 0))
     for txn in load_transactions(db, start=history_start, end=start - dt.timedelta(days=1)):
         month = month_key(txn.booked_on)
-        if is_spend(txn) and month in history_keys:
-            history[txn.category][month] += -txn.amount_minor
+        if (value := spend_value(txn)) and month in history_keys:
+            history[txn.category][month] += value
 
     rows = []
     for budget in db.scalars(select(Budget).order_by(Budget.category)):
@@ -215,7 +219,7 @@ def budget_status(db: Session, key: str | None = None) -> dict:
     unbudgeted = [
         {"category": category, "spent": to_major(amount)}
         for category, amount in sorted(spent.items(), key=lambda kv: kv[1], reverse=True)
-        if category not in budgeted
+        if category not in budgeted and amount > 0
     ]
     return {
         "month": key,
@@ -232,8 +236,8 @@ def account_spend(db: Session, start: dt.date, end: dt.date) -> dict:
     accounts = account_map(db)
     totals: dict[int, int] = defaultdict(int)
     for txn in txns:
-        if is_spend(txn):
-            totals[txn.account_id] += -txn.amount_minor
+        if value := spend_value(txn):
+            totals[txn.account_id] += value
     rows = [
         {
             "account": accounts[aid].name if aid in accounts else f"Account {aid}",
