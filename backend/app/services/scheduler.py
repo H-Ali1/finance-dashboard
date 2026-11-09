@@ -109,14 +109,18 @@ def run_maintenance() -> None:
             if saved:
                 _state["last_backup"] = saved.name
                 log.info("Daily backup saved: %s", saved.name)
-            db = SessionLocal()
-            try:
-                sync_service.prune_sync_logs(db)
-            finally:
-                db.close()
             backup.optimise()
     except Exception:
         log.exception("Daily backup/housekeeping failed; will retry")
+    # Cheap, so tried every tick: a failure doesn't wait for tomorrow's backup.
+    try:
+        db = SessionLocal()
+        try:
+            sync_service.prune_sync_logs(db)
+        finally:
+            db.close()
+    except Exception:
+        log.exception("Pruning sync history failed; will retry")
 
 
 def _tick() -> None:

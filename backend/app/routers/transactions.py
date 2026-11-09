@@ -149,14 +149,19 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
     pattern = payload.pattern.strip()
     # A regex keeps its case: lower-casing would turn \S into \s.
     pattern = pattern if payload.match_type == "regex" else pattern.lower()
-    # The same rule saved twice is one rule: its category is updated instead.
-    rule = db.scalar(
-        select(CategoryRule).where(
+    # The same rule saved twice is one rule: its category is updated instead,
+    # and copies saved by older versions are folded into it.
+    rule, *copies = db.scalars(
+        select(CategoryRule)
+        .where(
             CategoryRule.pattern == pattern,
             CategoryRule.match_type == payload.match_type,
             CategoryRule.field == payload.field,
         )
-    )
+        .order_by(CategoryRule.id)
+    ).all() or [None]
+    for copy in copies:
+        db.delete(copy)
     if rule is None:
         rule = CategoryRule(pattern=pattern, match_type=payload.match_type, field=payload.field)
         db.add(rule)

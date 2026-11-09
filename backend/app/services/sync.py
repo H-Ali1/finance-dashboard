@@ -110,18 +110,18 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
     for raw in raws:
         merchant_key = normalise_merchant(raw.merchant or raw.description)
         txn = existing.get(raw.external_id)
+        if raw.status == "reversed":
+            # The bank cancelled it (a declined or reversed card payment): the
+            # pending copy stored earlier, matched by its own ID, must not count.
+            if txn is not None and txn.status == "pending":
+                db.delete(txn)
+                existing.pop(raw.external_id, None)
+            continue
         if txn is None and (same := renamed.get(_fingerprint(raw.booked_on, raw.amount_minor, raw.description))):
             txn = same.pop(0)
             existing.pop(txn.external_id, None)
             txn.external_id = raw.external_id
             existing[raw.external_id] = txn
-        if raw.status == "reversed":
-            # The bank cancelled it (a declined or reversed card payment):
-            # a pending copy stored earlier must not count as spending.
-            if txn is not None:
-                db.delete(txn)
-                existing.pop(raw.external_id, None)
-            continue
         if txn is not None:
             # A pending row that settled, a statement re-imported with its
             # signs corrected, or an older row the bank now describes more

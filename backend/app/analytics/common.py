@@ -30,14 +30,15 @@ _CACHE = "analytics_cache"
 
 @event.listens_for(Session, "after_commit")
 @event.listens_for(Session, "after_rollback")
-def _forget_cached(session: Session) -> None:
+@event.listens_for(Session, "after_flush")
+def _forget_cached(session: Session, *_) -> None:
     session.info.pop(_CACHE, None)
 
 
 def per_request(fn):
     """Work a result out once per request (one database session), however
     many views ask for it: one dashboard load wanted the same recurring
-    payments nine times. Any commit starts afresh, and every caller gets its
+    payments nine times. Any write starts afresh, and every caller gets its
     own copy to change."""
 
     signature = inspect.signature(fn)

@@ -100,6 +100,8 @@ def fetch_accounts() -> list[RawAccount]:
 
             try:
                 goals = _get(client, f"/api/v2/account/{uid}/savings-goals").get("savingsGoalList", [])
+            except RateLimited:
+                raise  # wait for the next sync rather than report no savings
             except ProviderError:
                 goals = []  # scope not granted — not fatal
             for goal in goals:

@@ -211,3 +211,53 @@ def test_the_same_rule_saved_twice_is_one_rule(client):
         db.commit()
     finally:
         db.close()
+
+
+def test_a_cancellation_never_removes_a_booked_payment(fresh_db):
+    account = _account(fresh_db)
+    sync_service.upsert_transactions(fresh_db, account, [_raw("paid", 1, -4500, "EXAMPLE HOTEL")])
+    # A cancellation of a different hold, with the same date, amount and wording.
+    sync_service.upsert_transactions(fresh_db, account, [_raw("hold", 1, -4500, "EXAMPLE HOTEL", status="reversed")])
+    assert _count(fresh_db) == 1
+
+
+def test_savings_rate_limit_is_a_wait_not_missing_savings(monkeypatch):
+    import pytest
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, path, params=None):
+            req = httpx.Request("GET", "https://api.starlingbank.com" + path)
+            if path.endswith("/accounts"):
+                return httpx.Response(
+                    200, json={"accounts": [{"accountUid": "a", "defaultCategory": "c"}]}, request=req
+                )
+            if path.endswith("/balance"):
+                return httpx.Response(200, json={}, request=req)
+            return httpx.Response(429, text="", request=req)
+
+    monkeypatch.setattr(starling, "_client", lambda: Client())
+    with pytest.raises(starling.RateLimited):
+        starling.fetch_accounts()
+
+
+def test_saving_a_rule_folds_in_older_copies(fresh_db):
+    from app.models import CategoryRule
+    from app.routers.transactions import create_rule
+    from app.schemas import RuleCreate
+
+    fresh_db.add_all(
+        [
+            CategoryRule(pattern="example gym", category="Shopping", priority=50),
+            CategoryRule(pattern="example gym", category="Shopping", priority=100),
+        ]
+    )
+    fresh_db.commit()
+    create_rule(RuleCreate(pattern="Example Gym", category="Health & Fitness", apply_now=False), db=fresh_db)
+    rules = fresh_db.scalars(select(CategoryRule)).all()
+    assert [(r.category, r.priority) for r in rules] == [("Health & Fitness", 100)]
