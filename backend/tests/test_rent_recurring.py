@@ -216,3 +216,29 @@ def test_one_service_on_two_cards_at_once_is_not_joined(fresh_db):
             ],
         )
     assert [i for i in recurring.detect_recurring(fresh_db) if i["merchant_key"] == "example music"] == []
+
+
+def test_a_bill_on_one_card_is_found_when_another_card_overlaps(fresh_db):
+    """Card B pays monthly under two names; card A pays the same service
+    twice in between. Card B's bill is still found; card A stays apart."""
+    card_a = _account(fresh_db, "truelayer", "Card A")
+    card_b = _account(fresh_db, "truelayer", "Card B")
+
+    def gym(account, days, name):
+        return [
+            RawTransaction(
+                external_id=f"{account.name}-{d}",
+                booked_on=TODAY - dt.timedelta(days=d),
+                amount_minor=-2999,
+                description=name,
+                payment_type="card",
+            )
+            for d in days
+        ]
+
+    upsert_transactions(
+        fresh_db, card_b, gym(card_b, (120, 90), "EXAMPLE GYM") + gym(card_b, (60, 30), "EXAMPLE GYM CLUB")
+    )
+    upsert_transactions(fresh_db, card_a, gym(card_a, (75, 45), "EXAMPLE GYM"))
+    items = [i for i in recurring.detect_recurring(fresh_db) if i["family"] == "example gym"]
+    assert [(i["account_id"], i["occurrences"]) for i in items] == [(card_b.id, 4)]
