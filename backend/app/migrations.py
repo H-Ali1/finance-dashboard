@@ -60,10 +60,35 @@ def _v3_payment_type(conn: Connection) -> None:
         conn.exec_driver_sql("ALTER TABLE transactions ADD COLUMN payment_type VARCHAR(16)")
 
 
+def _v4_account_date_index(conn: Connection) -> None:
+    """Finds each account's newest transaction without a scan."""
+    if "transactions" not in inspect(conn).get_table_names():
+        return
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_transactions_account_booked ON transactions (account_id, booked_on)"
+    )
+
+
+def _v5_one_rule_per_pattern(conn: Connection) -> None:
+    """Older versions could save the same rule twice. Keep the latest of each
+    and stop it happening again."""
+    if "category_rules" not in inspect(conn).get_table_names():
+        return
+    conn.exec_driver_sql(
+        "DELETE FROM category_rules WHERE id NOT IN "
+        "(SELECT MAX(id) FROM category_rules GROUP BY field, match_type, pattern)"
+    )
+    conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_rule_pattern ON category_rules (field, match_type, pattern)"
+    )
+
+
 STEPS: list[Callable[[Connection], None]] = [
     _v1_baseline,
     _v2_connection_credentials,
     _v3_payment_type,
+    _v4_account_date_index,
+    _v5_one_rule_per_pattern,
 ]
 LATEST = len(STEPS)
 

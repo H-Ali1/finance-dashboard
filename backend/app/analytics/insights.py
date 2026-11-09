@@ -20,7 +20,7 @@ from . import anomalies as anomalies_mod
 from . import cashflow as cashflow_mod
 from . import recurring as recurring_mod
 from . import spending as spending_mod
-from .common import is_spend, load_transactions, month_key
+from .common import is_spend, load_transactions, month_key, per_request
 from .networth import compute_networth
 
 SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2, "good": 3}
@@ -39,6 +39,7 @@ def _insight(key, severity, title, detail, *, impact=None, impact_period="year",
     }
 
 
+@per_request
 def build_insights(db: Session) -> list[dict]:
     findings: list[dict] = []
     flow = cashflow_mod.cashflow(db)
@@ -447,6 +448,18 @@ def _consent_rules(connection: Connection) -> list[dict]:
 
 def _hygiene_rules(db: Session) -> list[dict]:
     out = []
+    for dup in anomalies_mod.detect_duplicate_accounts(db):
+        first, second = dup["accounts"]
+        out.append(
+            _insight(
+                f"accounts:duplicate:{dup['account_ids'][0]}:{dup['account_ids'][1]}",
+                "warning",
+                f"{first} and {second} look like the same account",
+                f"{dup['shared']} of {dup['of']} transactions match, so that spending is counted twice.",
+                action="Untick 'Counted' for the one you don't use, under Accounts on the Net worth tab.",
+                area="hygiene",
+            )
+        )
     for connection in db.scalars(select(Connection)):
         if connection.provider == "truelayer":
             out.extend(_consent_rules(connection))

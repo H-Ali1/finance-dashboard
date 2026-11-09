@@ -33,5 +33,5 @@ class RawTransaction:
     merchant: str = ""
     provider_category: str | None = None
     mcc: str | None = None
-    status: str = "booked"
+    status: str = "booked"  # booked|pending|reversed (cancelled: never stored)
     payment_type: str | None = None  # see categorise.PAYMENT_TYPES

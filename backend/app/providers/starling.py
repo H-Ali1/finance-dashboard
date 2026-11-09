@@ -9,6 +9,7 @@ lifetime) and are revoked from the developer portal.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import httpx
 
@@ -26,6 +27,18 @@ MIN_FEED_WINDOW = dt.timedelta(days=7)
 
 class RangeTooLong(ProviderError):
     """Starling refused a transactions request for covering too long a period."""
+
+
+class RateLimited(ProviderError):
+    """Starling is limiting requests (HTTP 429). Not a fault: try again later."""
+
+
+_UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def _label(path: str) -> str:
+    """The request without account and category IDs, for messages."""
+    return _UID.sub("…", path)
 
 
 def _client() -> httpx.Client:
@@ -50,9 +63,11 @@ def _get(client: httpx.Client, path: str, **params) -> dict:
             "that it carries the account/balance/transaction read scopes."
         )
     if resp.status_code == 400 and "QUERY_EXCEEDING_MAX_TIME_RANGE" in resp.text:
-        raise RangeTooLong(f"Starling {path}: period too long")
+        raise RangeTooLong(f"Starling {_label(path)}: period too long")
+    if resp.status_code == 429:
+        raise RateLimited("Starling is limiting requests for now. The next scheduled sync will catch up.")
     if resp.status_code >= 400:
-        raise ProviderError(f"Starling {path} failed: {resp.status_code} {resp.text[:200]}")
+        raise ProviderError(f"Starling {_label(path)} failed: {resp.status_code} {resp.text[:200]}")
     return resp.json()
 
 
@@ -85,6 +100,8 @@ def fetch_accounts() -> list[RawAccount]:
 
             try:
                 goals = _get(client, f"/api/v2/account/{uid}/savings-goals").get("savingsGoalList", [])
+            except RateLimited:
+                raise  # wait for the next sync rather than report no savings
             except ProviderError:
                 goals = []  # scope not granted — not fatal
             for goal in goals:
@@ -145,8 +162,8 @@ def fetch_transactions(account: RawAccount | dict, since: dt.date) -> list[RawTr
     out: list[RawTransaction] = []
     for item in items.values():
         status = (item.get("status") or "").upper()
-        if status in {"DECLINED", "REJECTED", "REVERSED"}:
-            continue
+        # Cancelled payments are passed on, so a pending copy stored earlier is removed.
+        cancelled = status in {"DECLINED", "REJECTED", "REVERSED"}
         minor = _amount_minor(item.get("amount"))
         signed = -minor if item.get("direction") == "OUT" else minor
         when = _parse_ts(item.get("transactionTime") or item.get("updatedAt"))
@@ -163,7 +180,7 @@ def fetch_transactions(account: RawAccount | dict, since: dt.date) -> list[RawTr
                 description=" ".join(p for p in (counterparty, reference) if p).strip(),
                 merchant=counterparty or reference,
                 provider_category=item.get("spendingCategory"),
-                status="pending" if status == "PENDING" else "booked",
+                status="reversed" if cancelled else "pending" if status == "PENDING" else "booked",
                 payment_type=payment_type,
             )
         )

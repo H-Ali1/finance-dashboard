@@ -6,6 +6,7 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -144,19 +145,35 @@ def list_rules(db: Session = Depends(get_db)) -> dict:
     }
 
 
+def save_rule(
+    db: Session, pattern: str, match_type: str, field: str, category: str, priority: int | None = None
+) -> CategoryRule:
+    """Save a rule, or change the one already saved for this pattern. The
+    database allows one per pattern; if a save at the same moment got there
+    first, that one is changed instead."""
+    where = (CategoryRule.pattern == pattern, CategoryRule.match_type == match_type, CategoryRule.field == field)
+    for _ in range(2):
+        rule = db.scalar(select(CategoryRule).where(*where))
+        if rule is None:
+            rule = CategoryRule(pattern=pattern, match_type=match_type, field=field)
+            db.add(rule)
+        rule.category = category
+        if priority is not None:
+            rule.priority = priority
+        try:
+            db.commit()
+            return rule
+        except IntegrityError:
+            db.rollback()
+    raise HTTPException(status_code=409, detail="That rule was being saved at the same time; try again")
+
+
 @router.post("/rules")
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
     pattern = payload.pattern.strip()
-    rule = CategoryRule(
-        # A regex keeps its case: lower-casing would turn \S into \s.
-        pattern=pattern if payload.match_type == "regex" else pattern.lower(),
-        match_type=payload.match_type,
-        field=payload.field,
-        category=payload.category,
-        priority=payload.priority,
-    )
-    db.add(rule)
-    db.commit()
+    # A regex keeps its case: lower-casing would turn \S into \s.
+    pattern = pattern if payload.match_type == "regex" else pattern.lower()
+    rule = save_rule(db, pattern, payload.match_type, payload.field, payload.category, payload.priority)
     changed = recategorise_all(db) if payload.apply_now else 0
     return {"id": rule.id, "recategorised": changed}
 
@@ -229,14 +246,14 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
     # Whole words, so the rule follows the payee when a reference is added to
     # the name, without catching other merchants that contain it.
     match_type = "words"
-    rule = db.scalar(select(CategoryRule).where(CategoryRule.field == "merchant", CategoryRule.pattern == key).limit(1))
-    if rule is None:
-        rule = CategoryRule(pattern=key, field="merchant", match_type=match_type, category=category)
-        db.add(rule)
-    else:
-        rule.category = category
-        rule.match_type = match_type
-    db.commit()
+    # Strictly ahead of any other rule on this exact name, so your choice wins.
+    others = db.scalar(
+        select(func.min(CategoryRule.priority)).where(
+            func.lower(CategoryRule.pattern) == key,  # regex rules keep their case
+            or_(CategoryRule.field != "merchant", CategoryRule.match_type != match_type),
+        )
+    )
+    rule = save_rule(db, key, match_type, "merchant", category, 100 if others is None else min(others - 1, 100))
     return {"rule_id": rule.id, "pattern": key, "category": category, "recategorised": recategorise_all(db)}
 
 

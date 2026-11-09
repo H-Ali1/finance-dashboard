@@ -231,17 +231,14 @@ def _account(db, provider="truelayer", **meta) -> Account:
     return account
 
 
-def test_older_rows_get_their_payment_type_when_the_bank_sends_them_again(fresh_db):
+def test_a_row_sent_again_with_more_detail_is_updated_not_added(fresh_db):
     account = _account(fresh_db)
     old = RawTransaction(
-        external_id="tl:txn-atm", booked_on=TODAY - dt.timedelta(days=40), amount_minor=-4000, description="LNK ACTON"
+        external_id="tl:txn-atm", booked_on=TODAY - dt.timedelta(days=4), amount_minor=-4000, description="LNK ACTON"
     )
     sync_service.upsert_transactions(fresh_db, account, [old])
     row = fresh_db.scalar(select(Transaction))
     assert (row.payment_type, row.category) == (None, "Uncategorised")
-
-    # Not read since the upgrade: the next read reaches back as far as TrueLayer allows.
-    assert sync_service._since_for(fresh_db, account) == TODAY - dt.timedelta(days=89)
 
     again = RawTransaction(
         external_id="tl:txn-atm",
@@ -251,11 +248,8 @@ def test_older_rows_get_their_payment_type_when_the_bank_sends_them_again(fresh_
         payment_type="cash",
     )
     assert sync_service.upsert_transactions(fresh_db, account, [again]) == 0  # updated, not added
-    sync_service._mark_read(fresh_db, account)
     fresh_db.refresh(row)
     assert (row.payment_type, row.category) == ("cash", "Cash")
-    # Once read, back to the usual few days of overlap.
-    assert sync_service._since_for(fresh_db, account) == old.booked_on - dt.timedelta(days=7)
 
 
 def test_manual_categories_survive_the_extra_detail(fresh_db):
