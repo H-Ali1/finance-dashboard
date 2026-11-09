@@ -290,13 +290,16 @@ def test_one_rule_per_pattern(tmp_path):
     engine.dispose()
 
 
-def test_choosing_a_category_for_a_merchant_replaces_older_rules_on_its_name(fresh_db):
+def test_a_category_chosen_for_a_merchant_beats_broader_rules(fresh_db):
     from app.models import CategoryRule
     from app.routers.transactions import categorise_merchant
     from app.schemas import MerchantCategory
+    from app.services.categorise import categorise
 
-    fresh_db.add(CategoryRule(pattern="example gym", match_type="contains", field="merchant", category="Shopping"))
+    fresh_db.add(CategoryRule(pattern="pret", match_type="contains", field="merchant", category="Shopping"))
     fresh_db.commit()
-    categorise_merchant(MerchantCategory(merchant="Example Gym", category="Health & Fitness"), db=fresh_db)
-    rules = fresh_db.scalars(select(CategoryRule)).all()
-    assert [(r.match_type, r.category) for r in rules] == [("words", "Health & Fitness")]
+    categorise_merchant(MerchantCategory(merchant="Pret A Manger", category="Eating Out"), db=fresh_db)
+    rules = sync_service._rules(fresh_db)
+    assert categorise(merchant="PRET A MANGER", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
+    # The broader rule still covers other merchants.
+    assert categorise(merchant="INTERPRET LTD", description="", amount_minor=-450, rules=rules)[0] == "Shopping"

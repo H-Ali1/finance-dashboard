@@ -145,6 +145,10 @@ def list_rules(db: Session = Depends(get_db)) -> dict:
     }
 
 
+# A category chosen for one merchant beats general rules (default priority 100).
+MERCHANT_RULE_PRIORITY = 10
+
+
 def save_rule(
     db: Session, pattern: str, match_type: str, field: str, category: str, priority: int | None = None
 ) -> CategoryRule:
@@ -246,14 +250,8 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
     # Whole words, so the rule follows the payee when a reference is added to
     # the name, without catching other merchants that contain it.
     match_type = "words"
-    # Your latest choice for this merchant replaces any older rule on the same name.
-    for older in db.scalars(
-        select(CategoryRule).where(
-            CategoryRule.field == "merchant", CategoryRule.pattern == key, CategoryRule.match_type != match_type
-        )
-    ):
-        db.delete(older)
-    rule = save_rule(db, key, match_type, "merchant", category)
+    # Ahead of broader rules (lower runs first), which stay for other merchants.
+    rule = save_rule(db, key, match_type, "merchant", category, MERCHANT_RULE_PRIORITY)
     return {"rule_id": rule.id, "pattern": key, "category": category, "recategorised": recategorise_all(db)}
 
 
