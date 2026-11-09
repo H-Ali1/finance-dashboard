@@ -23,7 +23,8 @@ on a Home Assistant Green, a small Raspberry Pi.
 flowchart TB
     user["User"] <--> tunnel["Cloudflare Tunnel"] <--> ha
 
-    %% The #nbsp; padding moves this title left, clear of the arrow.
+    %% #nbsp; padding moves this title left, clear of the arrow. The one after
+    %% "(read-only)" stops GitHub's wider font clipping the bracket.
     subgraph green["Home Assistant Green#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
         ha["Home Assistant<br/>login + MFA"] <--> container
         subgraph container["Docker container"]
@@ -34,7 +35,7 @@ flowchart TB
 
     container <--> apis
 
-    subgraph apis["Bank APIs (read-only)"]
+    subgraph apis["Bank APIs (read-only)#nbsp;"]
         direction LR
         truelayer["TrueLayer<br/>HSBC, Amex"] ~~~ starling["Starling API"] ~~~ t212["Trading 212 API"]
     end
