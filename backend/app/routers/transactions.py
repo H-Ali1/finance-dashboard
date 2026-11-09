@@ -246,11 +246,13 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
     # Whole words, so the rule follows the payee when a reference is added to
     # the name, without catching other merchants that contain it.
     match_type = "words"
-    # Level with any other rule on this exact name, so the newest choice wins.
-    level = db.scalar(
-        select(func.min(CategoryRule.priority)).where(CategoryRule.field == "merchant", CategoryRule.pattern == key)
+    # Strictly ahead of any other rule on this exact name, so your choice wins.
+    others = db.scalar(
+        select(func.min(CategoryRule.priority)).where(
+            CategoryRule.field == "merchant", CategoryRule.pattern == key, CategoryRule.match_type != match_type
+        )
     )
-    rule = save_rule(db, key, match_type, "merchant", category, min(level or 100, 100))
+    rule = save_rule(db, key, match_type, "merchant", category, 100 if others is None else min(others - 1, 100))
     return {"rule_id": rule.id, "pattern": key, "category": category, "recategorised": recategorise_all(db)}
 
 
