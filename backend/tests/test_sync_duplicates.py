@@ -344,3 +344,18 @@ def test_a_merchant_choice_wins_even_when_its_rule_is_older(fresh_db):
     categorise_merchant(MerchantCategory(merchant="Pret", category="Eating Out"), db=fresh_db)
     rules = sync_service._rules(fresh_db)
     assert categorise(merchant="PRET", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
+
+
+def test_a_merchant_choice_wins_over_a_same_text_description_rule(fresh_db):
+    from app.models import CategoryRule
+    from app.routers.transactions import categorise_merchant
+    from app.schemas import MerchantCategory
+    from app.services.categorise import categorise
+
+    fresh_db.add(
+        CategoryRule(pattern="pret", match_type="contains", field="description", category="Shopping", priority=5)
+    )
+    fresh_db.commit()
+    categorise_merchant(MerchantCategory(merchant="Pret", category="Eating Out"), db=fresh_db)
+    rules = sync_service._rules(fresh_db)
+    assert categorise(merchant="PRET", description="PRET", amount_minor=-450, rules=rules)[0] == "Eating Out"

@@ -249,7 +249,8 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
     # Strictly ahead of any other rule on this exact name, so your choice wins.
     others = db.scalar(
         select(func.min(CategoryRule.priority)).where(
-            CategoryRule.field == "merchant", CategoryRule.pattern == key, CategoryRule.match_type != match_type
+            CategoryRule.pattern == key,
+            or_(CategoryRule.field != "merchant", CategoryRule.match_type != match_type),
         )
     )
     rule = save_rule(db, key, match_type, "merchant", category, 100 if others is None else min(others - 1, 100))
