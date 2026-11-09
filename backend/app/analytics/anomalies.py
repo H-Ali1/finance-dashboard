@@ -112,7 +112,8 @@ def _repeats_earlier_payment(txn, same_payee: list) -> bool:
     amount = -txn.amount_minor
     for earlier in same_payee:
         gap = (txn.booked_on - earlier.booked_on).days
-        if 6 <= gap <= 380 and abs(-earlier.amount_minor - amount) <= amount * 0.1:
+        # Within 10%, in whole pence.
+        if 6 <= gap <= 380 and abs(-earlier.amount_minor - amount) * 10 <= amount:
             return True
     return False
 

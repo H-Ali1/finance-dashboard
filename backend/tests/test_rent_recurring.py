@@ -193,3 +193,26 @@ def test_rent_counts_as_a_fixed_commitment(fresh_db):
 def test_payees_join_on_two_words_not_a_surname():
     assert recurring.payee("example homes flat b") == recurring.payee("example homes") == "example homes"
     assert recurring.payee("m khan") != recurring.payee("a khan")
+
+
+def test_one_service_on_two_cards_at_once_is_not_joined(fresh_db):
+    """Two payments on each card, a fortnight apart from each other: joined,
+    they would look like one fortnightly bill at double the cost."""
+    card_a = _account(fresh_db, "truelayer", "Card A")
+    card_b = _account(fresh_db, "truelayer", "Card B")
+    for account, days in ((card_a, (60, 30)), (card_b, (45, 15))):
+        upsert_transactions(
+            fresh_db,
+            account,
+            [
+                RawTransaction(
+                    external_id=f"{account.name}-{d}",
+                    booked_on=TODAY - dt.timedelta(days=d),
+                    amount_minor=-999,
+                    description="EXAMPLE MUSIC",
+                    payment_type="card",
+                )
+                for d in days
+            ],
+        )
+    assert [i for i in recurring.detect_recurring(fresh_db) if i["merchant_key"] == "example music"] == []

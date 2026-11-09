@@ -206,8 +206,8 @@ def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[di
             unmatched[payee(key)].append(rows)
 
     for parts in unmatched.values():
-        if len(parts) < 2:
-            continue  # nothing to join it with
+        if len(parts) < 2 or not _one_bank_at_a_time(parts):
+            continue  # nothing to join it with, or one service on two cards at once
         rows = sorted((t for part in parts for t in part), key=lambda t: t.booked_on)
         if item := _detect_group(rows, accounts, today):
             found.append((item, rows))
@@ -216,6 +216,16 @@ def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[di
     items.sort(key=lambda r: r["annual_cost"], reverse=True)
     _flag_duplicates(items)
     return items
+
+
+def _one_bank_at_a_time(parts: list[list]) -> bool:
+    """Names can alternate at one bank, but a second bank must take over
+    after the first stops: paid from two at once is two payments."""
+    days: dict[int, list[dt.date]] = defaultdict(list)
+    for part in parts:
+        days[part[0].account_id].extend(t.booked_on for t in part)
+    spans = sorted((min(d), max(d)) for d in days.values())
+    return all(later[0] > earlier[1] for earlier, later in pairwise(spans))
 
 
 def _join_handovers(found: list[tuple[dict, list]], accounts: dict, today: dt.date) -> list[dict]:
