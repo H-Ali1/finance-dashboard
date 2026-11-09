@@ -3,6 +3,10 @@
 Home Assistant shows this when an update is available. Releases are added
 automatically by the CI workflow.
 
+## 1.1.5
+
+- Rent is a recurring bill, never an unusual payment (#10)
+
 ## 1.1.4
 
 - Better automatic categorisation, and categorise a merchant in one step (#9)
