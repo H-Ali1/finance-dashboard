@@ -3,6 +3,10 @@
 Home Assistant shows this when an update is available. Releases are added
 automatically by the CI workflow.
 
+## 1.1.7
+
+- Sync only new data; never store or count the same transaction twice (#12)
+
 ## 1.1.6
 
 - Income by source, with refunds and own transfers left out (#11)
