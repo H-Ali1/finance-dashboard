@@ -313,3 +313,18 @@ def test_a_category_chosen_for_a_merchant_beats_broader_rules(fresh_db):
     rules = sync_service._rules(fresh_db)
     assert categorise(merchant="AMAZON PRIME", description="", amount_minor=-899, rules=rules)[0] == "Subscriptions"
     assert categorise(merchant="AMAZON", description="", amount_minor=-2000, rules=rules)[0] == "Shopping"
+
+
+def test_a_merchant_choice_wins_over_a_same_name_rule_of_any_priority(fresh_db):
+    from app.models import CategoryRule
+    from app.routers.transactions import categorise_merchant
+    from app.schemas import MerchantCategory
+    from app.services.categorise import categorise
+
+    fresh_db.add(
+        CategoryRule(pattern="pret", match_type="contains", field="merchant", category="Shopping", priority=10)
+    )
+    fresh_db.commit()
+    categorise_merchant(MerchantCategory(merchant="Pret", category="Eating Out"), db=fresh_db)
+    rules = sync_service._rules(fresh_db)
+    assert categorise(merchant="PRET", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
