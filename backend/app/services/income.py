@@ -31,6 +31,8 @@ _ORGANISATION = re.compile(
     r"corporation|company|partners|agency|foundation|charity|insurance|pension)\b",
     re.IGNORECASE,
 )
+# Money in under these is income or your own money, not a refund.
+_NOT_REFUNDS = {"Salary", "Tutoring", "Income", "Transfers", "Savings & Investments", "Uncategorised"}
 SALARY_MIN_MINOR = 30_000  # £300: smaller regular payments are something else
 # Accepted gaps between pay days: weekly, fortnightly, four-weekly, monthly.
 _PAY_GAPS = ((6, 8), (12, 16), (26, 35))
@@ -78,10 +80,23 @@ def refine(rows: list[Transaction], proposals: dict[int, tuple[str, str]], accou
     mine = own_names(rows)
 
     unsure: dict[str, list[Transaction]] = defaultdict(list)
+    # Bank transfers in from a payer whose name is a shop's look like refunds;
+    # paid like a salary, they're one.
+    shop_named: dict[str, list[Transaction]] = defaultdict(list)
     for txn in rows:
         category, source = proposals.get(txn.id, (None, None))
-        if txn.amount_minor > 0 and category == "Income" and source == "auto":
+        if txn.amount_minor <= 0 or source != "auto":
+            continue
+        if category == "Income":
             unsure[_payer(txn)].append(txn)
+        elif category not in _NOT_REFUNDS and txn.payment_type == "transfer":
+            shop_named[_payer(txn)].append(txn)
+
+    for payments in shop_named.values():
+        organisation = any(looks_like_organisation(f"{t.description} {t.merchant}") for t in payments)
+        if organisation and _paid_like_a_salary(payments):
+            for txn in payments:
+                proposals[txn.id] = ("Salary", "auto")
 
     for payer, payments in unsure.items():
         if payer and payer in mine:

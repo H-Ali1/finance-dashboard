@@ -974,6 +974,10 @@ def categorise(
 
     if spent_on in NOT_SPENDING_OR_INCOME or spent_on in INCOME_CATEGORIES:
         return spent_on, "auto"
+    # The bank calls a bank transfer income, and nothing says refund: income,
+    # even from a payer whose name is also a shop's (an employer like a supermarket).
+    if not refund and payment_type != "card" and provider_category_name(provider_category) == "Income":
+        return "Income", "auto"
     refund = refund or payment_type == "card"
     if spent_on:
         return spent_on, "auto"  # money back from somewhere you spend: a refund

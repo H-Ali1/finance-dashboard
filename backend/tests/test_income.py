@@ -247,3 +247,22 @@ def test_a_payer_rule_uses_the_stored_name(fresh_db):
     )
     assert saved["pattern"] == stored
     assert _categories(fresh_db) == {"a": "Tutoring", "b": "Income"}
+
+
+def test_a_salary_from_a_payer_named_like_a_shop(fresh_db):
+    """An employer whose name is also a shop's: BACS pay is salary, the
+    occasional card refund from the same name is still a refund."""
+    starling = Account(provider="starling", external_id="st", name="Starling", kind="current")
+    hsbc = Account(provider="truelayer", external_id="hs", name="HSBC", kind="current")
+    fresh_db.add_all([starling, hsbc])
+    fresh_db.commit()
+    rows_st = [_raw(f"st-{n}", _month(n, 28), 1900.00, "TESCO PLC", "transfer", "INCOME") for n in range(1, 4)]
+    rows_hs = [_raw(f"hs-{n}", _month(n, 27), 450.00, "TESCO STORES PLC", "transfer") for n in range(1, 4)]
+    rows_hs.append(_raw("refund", TODAY, 12.50, "TESCO STORES 3315", "card"))
+    sync_service.upsert_transactions(fresh_db, starling, rows_st)
+    sync_service.upsert_transactions(fresh_db, hsbc, rows_hs)
+    sync_service.recategorise_all(fresh_db)
+    got = _categories(fresh_db)
+    assert {got[f"st-{n}"] for n in range(1, 4)} == {"Salary"}  # the bank said income
+    assert {got[f"hs-{n}"] for n in range(1, 4)} == {"Salary"}  # paid like a salary
+    assert got["refund"] == "Groceries"
