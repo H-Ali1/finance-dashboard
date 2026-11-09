@@ -213,13 +213,19 @@ def detect_recurring(db: Session, lookback_days: int = LOOKBACK_DAYS) -> list[di
         by_bank: dict[int, list[list]] = defaultdict(list)
         for part in parts:
             by_bank[part[0].account_id].append(part)
-        tries = [parts] if _one_bank_at_a_time(parts) else []
-        tries += [bank for bank in by_bank.values() if len(bank) >= 2 and len(by_bank) > 1]
-        for attempt in tries:
-            rows = sorted((t for part in attempt for t in part), key=lambda t: t.booked_on)
+        if _one_bank_at_a_time(parts):
+            rows = sorted((t for part in parts for t in part), key=lambda t: t.booked_on)
             if item := _detect_group(rows, accounts, today):
                 found.append((item, rows))
-                break
+                continue
+        if len(by_bank) < 2:
+            continue
+        for bank in by_bank.values():
+            if len(bank) < 2:
+                continue
+            rows = sorted((t for part in bank for t in part), key=lambda t: t.booked_on)
+            if item := _detect_group(rows, accounts, today):
+                found.append((item, rows))
 
     items = _join_handovers(found, accounts, today)
     items.sort(key=lambda r: r["annual_cost"], reverse=True)

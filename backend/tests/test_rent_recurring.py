@@ -242,3 +242,31 @@ def test_a_bill_on_one_card_is_found_when_another_card_overlaps(fresh_db):
     upsert_transactions(fresh_db, card_a, gym(card_a, (75, 45), "EXAMPLE GYM"))
     items = [i for i in recurring.detect_recurring(fresh_db) if i["family"] == "example gym"]
     assert [(i["account_id"], i["occurrences"]) for i in items] == [(card_b.id, 4)]
+
+
+def test_two_overlapping_banks_each_keep_their_bill(fresh_db):
+    """Both cards pay the same service monthly, each under two names."""
+    card_a = _account(fresh_db, "truelayer", "Card A")
+    card_b = _account(fresh_db, "truelayer", "Card B")
+
+    def gym(account, days, name):
+        return [
+            RawTransaction(
+                external_id=f"{account.name}-{d}",
+                booked_on=TODAY - dt.timedelta(days=d),
+                amount_minor=-2999,
+                description=name,
+                payment_type="card",
+            )
+            for d in days
+        ]
+
+    for account, start in ((card_a, 0), (card_b, 10)):
+        upsert_transactions(
+            fresh_db,
+            account,
+            gym(account, (start + 120, start + 90), "EXAMPLE GYM")
+            + gym(account, (start + 60, start + 30), "EXAMPLE GYM CLUB"),
+        )
+    items = [i for i in recurring.detect_recurring(fresh_db) if i["family"] == "example gym"]
+    assert sorted((i["account_id"], i["occurrences"]) for i in items) == [(card_a.id, 4), (card_b.id, 4)]
