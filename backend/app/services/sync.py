@@ -34,12 +34,12 @@ def _now() -> dt.datetime:
 
 
 def _rules(db: Session) -> list[CategoryRule]:
-    """In priority order; at the same priority the longer, more specific
-    pattern goes first ("amazon prime" before "amazon")."""
+    """Most specific first: the longer pattern ("amazon prime" before
+    "amazon"), then priority, then the one saved most recently."""
     return list(
         db.scalars(
             select(CategoryRule).order_by(
-                CategoryRule.priority, func.length(CategoryRule.pattern).desc(), CategoryRule.id
+                func.length(CategoryRule.pattern).desc(), CategoryRule.priority, CategoryRule.id.desc()
             )
         )
     )

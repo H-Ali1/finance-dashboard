@@ -303,3 +303,13 @@ def test_a_category_chosen_for_a_merchant_beats_broader_rules(fresh_db):
     assert categorise(merchant="PRET A MANGER", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
     # The broader rule still covers other merchants.
     assert categorise(merchant="INTERPRET LTD", description="", amount_minor=-450, rules=rules)[0] == "Shopping"
+
+    # And a more specific rule keeps its place over a broader merchant choice.
+    fresh_db.add(
+        CategoryRule(pattern="amazon prime", match_type="contains", field="merchant", category="Subscriptions")
+    )
+    fresh_db.commit()
+    categorise_merchant(MerchantCategory(merchant="Amazon", category="Shopping"), db=fresh_db)
+    rules = sync_service._rules(fresh_db)
+    assert categorise(merchant="AMAZON PRIME", description="", amount_minor=-899, rules=rules)[0] == "Subscriptions"
+    assert categorise(merchant="AMAZON", description="", amount_minor=-2000, rules=rules)[0] == "Shopping"
