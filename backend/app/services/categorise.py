@@ -3,9 +3,17 @@
 Order of precedence, highest first:
   1. a manual category set on the transaction in the UI  (never overwritten)
   2. a user rule from the category_rules table
-  3. keyword match against the merchant/description
-  4. the merchant category code (MCC) the card network supplied
-  5. the provider's own category (Starling ships a decent one)
+  3. the kind of payment, where it settles the question (cash machine, bank
+     fee, interest, a move between your own pots)
+  4. keyword match against the merchant/description
+  5. the merchant category code (MCC) the card network supplied
+  6. the provider's own category (Starling's, which you can also set in the
+     Starling app, and TrueLayer's classification for HSBC, Amex, ...)
+
+Keywords match whole words, so "bar" finds "The Bar" but not "Barclays". The
+keyword nearest the start of the description wins, since that's where the
+brand is ("Tesco Heathrow Airport" is groceries), and of two starting at the
+same word the longer one wins ("Amazon Prime" is a subscription).
 """
 
 from __future__ import annotations
@@ -29,12 +37,28 @@ CATEGORIES = [
     "Cash",
     "Fees & Interest",
     "Insurance",
+    "Tax",
     "Education",
     "Gifts & Charity",
     "Savings & Investments",
     "Transfers",
     "Uncategorised",
 ]
+
+# What kind of payment it was, in one vocabulary for every provider. Banks
+# say it in their own words (Starling's `source`, TrueLayer's
+# `transaction_category`, HSBC's "SO"/"DD"/"VIS" codes); providers translate.
+PAYMENT_TYPES = (
+    "card",  # a card purchase or a card refund
+    "direct_debit",
+    "standing_order",
+    "transfer",  # a bank transfer to or from someone: Faster Payments, BACS, CHAPS
+    "cash",  # cash machine
+    "interest",
+    "fee",
+    "internal",  # between your own pots at the same bank (Starling spaces)
+    "dividend",
+)
 
 # Noise that appears around the actual merchant name on UK statements.
 _NOISE = re.compile(
@@ -57,12 +81,16 @@ _PROCESSORS = {
     "sumup",
     "zettle",
     "izettle",
+    "iz",
     "stripe",
     "wpy",
     "wp",
     "tsys",
     "worldpay",
     "shopify",
+    "sp",
+    "crv",  # Curve
+    "lsp",
     "gsuite",
     "google",
     "fb",
@@ -100,34 +128,54 @@ def display_merchant(raw: str) -> str:
     return " ".join(word.capitalize() if len(word) > 2 else word.upper() for word in key.split())
 
 
+# Keywords match as whole words (a trailing "s" or "es" is allowed, for
+# "Sainsburys" and "Nando's"), against the merchant and description with
+# punctuation turned into spaces: write "m s" for M&S, "co op" for Co-op.
+# Avoid words that are also place or people's names ("Hastings", "Isa").
 _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     (
         "Groceries",
         (
             "tesco",
+            "tesco express",
+            "tesco extra",
+            "tesco stores",
             "sainsbury",
             "asda",
             "morrison",
             "aldi",
             "lidl",
             "waitrose",
-            "co-op",
+            "co op",
             "coop",
             "iceland",
             "ocado",
             "marks spencer",
+            "marks and spencer",
             "m s simply food",
+            "m s food",
             "spar",
             "budgens",
             "nisa",
             "farmfoods",
+            "heron foods",
             "costcutter",
+            "costco",
+            "booker",
             "premier stores",
+            "one stop",
+            "londis",
+            "whole foods",
+            "planet organic",
+            "amazon fresh",
             "grocer",
+            "grocery",
+            "groceries",
             "supermarket",
             "food warehouse",
             "gettir",
             "getir",
+            "gopuff",
             "zapp",
         ),
     ),
@@ -137,6 +185,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "mcdonald",
             "kfc",
             "burger king",
+            "burger",
             "subway",
             "greggs",
             "nando",
@@ -150,6 +199,9 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "caffe nero",
             "cafe",
             "coffee",
+            "joe the juice",
+            "tim hortons",
+            "krispy kreme",
             "restaurant",
             "deliveroo",
             "uber eats",
@@ -159,17 +211,25 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "takeaway",
             "kebab",
             "chicken",
+            "fish and chip",
+            "chippy",
             "sushi",
             "bakery",
             "five guys",
             "wingstop",
+            "popeyes",
+            "taco bell",
             "chipotle",
             "tortilla",
             "leon",
             "itsu",
+            "wasabi",
             "gail",
             "dishoom",
             "bill s",
+            "zizzi",
+            "prezzo",
+            "franco manca",
             "toby carvery",
             "harvester",
             "wetherspoon",
@@ -180,6 +240,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "shawarma",
             "chai",
             "dessert",
+            "too good to go",
         ),
     ),
     (
@@ -195,6 +256,13 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "northern rail",
             "thameslink",
             "southeastern",
+            "southern railway",
+            "c2c",
+            "chiltern railways",
+            "crosscountry",
+            "scotrail",
+            "transpennine",
+            "heathrow express",
             "uber",
             "bolt",
             "free now",
@@ -202,20 +270,30 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "taxi",
             "cab",
             "bus",
+            "first bus",
             "stagecoach",
             "arriva",
             "megabus",
             "national express",
             "oyster",
+            "santander cycles",
+            "lime",
+            "zipcar",
             "parking",
+            "car park",
+            "ncp",
+            "q park",
+            "apcoa",
             "ringgo",
             "justpark",
             "pay by phone",
             "paybyphone",
             "dart charge",
+            "m6 toll",
             "congestion",
             "ulez",
             "dvla",
+            "dvsa",
             "mot",
             "halfords",
             "kwik fit",
@@ -227,11 +305,11 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
         "Fuel",
         (
             "shell",
-            "bp ",
+            "bp",
             "esso",
             "texaco",
             "gulf",
-            "jet ",
+            "jet",
             "petrol",
             "fuel",
             "applegreen",
@@ -267,6 +345,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "temu",
             "sports direct",
             "jd sports",
+            "decathlon",
             "nike",
             "adidas",
             "ikea",
@@ -283,8 +362,13 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "home bargains",
             "b m",
             "tk maxx",
+            "tkmaxx",
+            "homesense",
             "matalan",
             "very co",
+            "selfridges",
+            "card factory",
+            "smyths",
             "shop",
             "store",
             "vinted",
@@ -301,7 +385,11 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "edf",
             "eon",
             "e on",
+            "eon next",
+            "ovo",
             "ovo energy",
+            "so energy",
+            "sse",
             "scottish power",
             "shell energy",
             "utilita",
@@ -311,35 +399,62 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "anglian water",
             "united utilities",
             "yorkshire water",
+            "southern water",
+            "affinity water",
+            "wessex water",
+            "south east water",
+            "dwr cymru",
             "council tax",
+            "council",
             "tv licence",
             "tv licensing",
+            "bt",
             "bt group",
             "bt broadband",
-            "sky ",
+            "sky",
+            "sky digital",
             "virgin media",
             "talktalk",
             "plusnet",
             "hyperoptic",
             "community fibre",
             "vodafone",
-            "ee ",
+            "ee",
             "o2",
             "three",
             "giffgaff",
             "lebara",
             "lyca",
+            "lycamobile",
             "smarty",
             "id mobile",
+            "tesco mobile",
+            "sky mobile",
+            "virgin mobile",
             "voxi",
             "utility",
+            "utilities",
             "energy",
             "water",
         ),
     ),
     (
         "Rent & Mortgage",
-        ("rent", "landlord", "letting", "mortgage", "nationwide bs", "property management", "housing"),
+        (
+            "rent",
+            "landlord",
+            "letting",
+            "letting agent",
+            "tenancy",
+            "openrent",
+            "mortgage",
+            "nationwide bs",
+            "property management",
+            "housing",
+            "housing association",
+            # Housing associations and lettings firms: "... Homes".
+            "homes",
+        ),
     ),
     (
         "Subscriptions",
@@ -347,17 +462,25 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "netflix",
             "spotify",
             "disney",
+            "disney plus",
             "apple com bill",
             "apple services",
             "itunes",
             "google",
+            "google one",
             "youtube",
             "amazon prime",
             "prime video",
+            "amazon digital",
             "now tv",
             "nowtv",
             "paramount",
             "hayu",
+            "britbox",
+            "dazn",
+            "crunchyroll",
+            "deezer",
+            "tidal",
             "audible",
             "kindle unlimited",
             "dropbox",
@@ -372,12 +495,17 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "notion",
             "canva",
             "figma",
+            "zoom us",
+            "zoom video",
             "linkedin",
             "duolingo",
             "strava",
             "patreon",
             "substack",
             "medium",
+            "nordvpn",
+            "expressvpn",
+            "1password",
             "the times",
             "guardian",
             "telegraph",
@@ -402,6 +530,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "eventbrite",
             "dice fm",
             "steam games",
+            "steampowered",
             "playstation",
             "nintendo",
             "epic games",
@@ -412,6 +541,9 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "zoo",
             "concert",
             "festival",
+            "sky bet",
+            "bet365",
+            "national lottery",
         ),
     ),
     (
@@ -433,6 +565,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "puregym",
             "pure gym",
             "the gym group",
+            "gym",
             "david lloyd",
             "virgin active",
             "nuffield",
@@ -440,6 +573,8 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "gymshark",
             "myprotein",
             "holland barrett",
+            "barber",
+            "hairdresser",
             "bupa",
             "vitality",
         ),
@@ -454,7 +589,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "jet2",
             "tui",
             "emirates",
-            "qatar",
+            "qatar airways",
             "turkish airlines",
             "pegasus",
             "airbnb",
@@ -472,6 +607,12 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "skyscanner",
             "lastminute",
             "on the beach",
+            "car hire",
+            "rent a car",
+            "enterprise rent",
+            "europcar",
+            "hertz",
+            "avis",
         ),
     ),
     ("Cash", ("cash withdrawal", "atm", "link atm", "cardtronics", "notemachine", "cash machine")),
@@ -499,9 +640,9 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "direct line",
             "aviva",
             "axa",
-            "churchill",
-            "hastings",
-            "lv ",
+            "churchill insurance",
+            "hastings direct",
+            "lv",
             "esure",
             "quotemehappy",
             "comparethemarket",
@@ -509,11 +650,12 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "gocompare",
         ),
     ),
+    ("Tax", ("hmrc", "self assessment")),
     (
         "Education",
         (
             "student loan",
-            "slc ",
+            "slc",
             "university",
             "college",
             "tuition",
@@ -539,6 +681,7 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "gift",
             "donation",
             "zakat",
+            "sadaqah",
         ),
     ),
     (
@@ -547,43 +690,28 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "trading 212",
             "trading212",
             "vanguard",
-            "hargreaves",
+            "hargreaves lansdown",
             "aj bell",
             "freetrade",
             "invest",
+            "investment",
+            "investing",
             "coinbase",
             "kraken",
             "binance",
             "revolut savings",
             "moneybox",
             "plum",
-            "chip ",
+            "chip financial",
             "premium bonds",
             "ns i",
             "nsandi",
             "pension",
             "nutmeg",
             "wealthify",
-            "isa ",
-        ),
-    ),
-    (
-        "Income",
-        (
-            "salary",
-            "payroll",
-            "wages",
-            "hmrc",
-            "dwp",
-            "universal credit",
-            "child benefit",
-            "tax credit",
-            "dividend",
-            "refund",
-            "reimbursement",
-            "bonus",
-            "stipend",
-            "grant",
+            "cash isa",
+            "stocks and shares isa",
+            "lifetime isa",
         ),
     ),
     (
@@ -604,6 +732,55 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ),
 ]
 
+# Words that only ever mean money coming in. Paying HMRC is tax, not income,
+# so these count for money arriving only.
+_INCOME_KEYWORDS: tuple[str, ...] = (
+    "salary",
+    "payroll",
+    "wages",
+    "hmrc",
+    "dwp",
+    "universal credit",
+    "child benefit",
+    "tax credit",
+    "dividend",
+    "refund",
+    "reimbursement",
+    "bonus",
+    "stipend",
+    "grant",
+)
+
+
+def _words(text: str) -> str:
+    """Lower case, punctuation as spaces: the form keywords are written in."""
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _compile(keywords: list[tuple[str, tuple[str, ...]]]) -> tuple[re.Pattern[str], dict[str, str]]:
+    owner: dict[str, str] = {}
+    for category, words in keywords:
+        for word in words:
+            owner.setdefault(_words(word), category)  # the first category listed wins a tie
+    # Longest first: where two keywords start at the same word, the longer one matches.
+    alternatives = "|".join(re.escape(w) for w in sorted(owner, key=len, reverse=True))
+    return re.compile(rf"(?<![a-z0-9])(?P<kw>{alternatives})(?:e?s)?(?![a-z0-9])"), owner
+
+
+_SPEND_PATTERN, _SPEND_OWNER = _compile(_KEYWORDS)
+_INCOME_PATTERN, _INCOME_OWNER = _compile([("Income", _INCOME_KEYWORDS)])
+
+
+def _first_keyword(pattern: re.Pattern[str], owner: dict[str, str], words: str) -> str | None:
+    match = pattern.search(words)
+    return owner[match.group("kw")] if match else None
+
+
+def keyword_category(text: str) -> str | None:
+    """The spending category a merchant name or description points to."""
+    return _first_keyword(_SPEND_PATTERN, _SPEND_OWNER, _words(text))
+
+
 # Card-network merchant category codes -> our categories (partial but useful).
 _MCC = {
     **{c: "Groceries" for c in ("5411", "5422", "5451", "5462", "5499")},
@@ -620,37 +797,91 @@ _MCC = {
     "8398": "Gifts & Charity",
     "8220": "Education",
     "6300": "Insurance",
+    "6513": "Rent & Mortgage",
+    "9311": "Tax",
 }
 
-# Starling ships its own spendingCategory on every feed item.
+# Starling's spendingCategory: every value it sends. You can change these in
+# the Starling app, so they carry your own choices too. GENERAL, NONE, OTHER
+# and the like say nothing and fall through.
 _PROVIDER = {
     "GROCERIES": "Groceries",
     "EATING_OUT": "Eating Out",
+    "COFFEE": "Eating Out",
+    "DRINKS": "Eating Out",
+    "TAKEAWAY": "Eating Out",
     "TRANSPORT": "Transport",
+    "TAXI": "Transport",
+    "CAR": "Transport",
+    "BIKE": "Transport",
+    "FUEL": "Fuel",
     "SHOPPING": "Shopping",
-    "BILLS_AND_SERVICES": "Bills & Utilities",
-    "ENTERTAINMENT": "Entertainment",
-    "GENERAL": "Uncategorised",
-    "HOLIDAYS": "Holidays",
+    "CLOTHES": "Shopping",
     "EXPENSES": "Shopping",
-    "INCOME": "Income",
-    "SAVING": "Savings & Investments",
     "FAMILY": "Shopping",
-    "PERSONAL_CARE": "Health & Fitness",
+    "CHILDREN": "Shopping",
+    "PETS": "Shopping",
+    "HOME": "Shopping",
+    "DIY": "Shopping",
+    "GARDEN": "Shopping",
+    "MAINTENANCE_AND_REPAIRS": "Shopping",
+    "TREATS": "Shopping",
+    "IMPULSE_BUY": "Shopping",
+    "BILLS_AND_SERVICES": "Bills & Utilities",
+    "RENT": "Rent & Mortgage",
+    "MORTGAGE": "Rent & Mortgage",
+    "SUBSCRIPTIONS": "Subscriptions",
+    "ENTERTAINMENT": "Entertainment",
     "LIFESTYLE": "Entertainment",
-    "HOME": "Bills & Utilities",
+    "GAMING": "Entertainment",
+    "HOBBY": "Entertainment",
+    "GAMBLING": "Entertainment",
+    "PERSONAL_CARE": "Health & Fitness",
+    "MEDICAL": "Health & Fitness",
+    "FITNESS": "Health & Fitness",
+    "WELLBEING": "Health & Fitness",
+    # Starling's Holidays and the keywords' Travel are the same money.
+    "HOLIDAYS": "Travel",
+    "CASH": "Cash",
+    "INSURANCE": "Insurance",
+    "EDUCATION": "Education",
     "GIFTS": "Gifts & Charity",
     "CHARITY": "Gifts & Charity",
+    "CELEBRATION": "Gifts & Charity",
+    "WEDDING": "Gifts & Charity",
+    "RELATIONSHIPS": "Gifts & Charity",
+    "INCOME": "Income",
+    "SAVING": "Savings & Investments",
+    "INVESTMENTS": "Savings & Investments",
+    "DEBT_REPAYMENT": "Transfers",
     "PAYMENTS": "Transfers",
     "TRANSFERS": "Transfers",
 }
+_CATEGORY_NAMES = {name.lower(): name for name in CATEGORIES}
 
 
-def _keyword_category(haystack: str) -> str | None:
-    for category, keywords in _KEYWORDS:
-        for keyword in keywords:
-            if keyword in haystack:
-                return category
+def provider_category_name(code: str | None) -> str | None:
+    """Our category for a provider's: a Starling code, or one of our own
+    names (TrueLayer's classification is translated into those)."""
+    if not code:
+        return None
+    code = code.strip()
+    # Starling's codes first: its HOLIDAYS is our Travel, not our Holidays.
+    mapped = _PROVIDER.get(code) or _CATEGORY_NAMES.get(code.lower())
+    return mapped if mapped and mapped != "Uncategorised" else None
+
+
+def _payment_type_category(payment_type: str | None, amount_minor: int) -> str | None:
+    if payment_type == "cash" and amount_minor < 0:
+        return "Cash"
+    if payment_type == "fee" and amount_minor < 0:
+        return "Fees & Interest"
+    if payment_type == "interest":
+        return "Income" if amount_minor > 0 else "Fees & Interest"
+    if payment_type == "dividend" and amount_minor > 0:
+        return "Income"
+    if payment_type == "internal":
+        return "Transfers"
     return None
 
 
@@ -661,19 +892,30 @@ def categorise(
     amount_minor: int,
     mcc: str | None = None,
     provider_category: str | None = None,
+    payment_type: str | None = None,
     rules: list | None = None,
 ) -> tuple[str, str]:
     """Returns (category, source)."""
     merchant_key = normalise_merchant(merchant or description)
     description_key = (description or "").lower()
 
+    # A name in a script other than Latin normalises to nothing; rules then
+    # match the name as written.
+    rule_merchant = merchant_key or (merchant or description or "").strip().lower()
     for rule in rules or []:
-        target = merchant_key if rule.field == "merchant" else description_key
+        target = rule_merchant if rule.field == "merchant" else description_key
         if _rule_matches(rule, target):
             return rule.category, "rule"
 
-    haystack = f"{merchant_key} {description_key}"
-    if match := _keyword_category(haystack):
+    if by_type := _payment_type_category(payment_type, amount_minor):
+        return by_type, "auto"
+
+    # The bank's own wording first: "UBER *EATS" says more than the "uber" key.
+    words = _words(f"{description_key} {merchant_key}")
+    if amount_minor > 0 and _first_keyword(_INCOME_PATTERN, _INCOME_OWNER, words):
+        return "Income", "auto"
+
+    if match := _first_keyword(_SPEND_PATTERN, _SPEND_OWNER, words):
         # An inbound payment matching a spend keyword is almost always a refund.
         if amount_minor > 0 and match not in {"Income", "Transfers", "Savings & Investments"}:
             return "Income", "auto"
@@ -682,8 +924,7 @@ def categorise(
     if mcc and (mapped := _MCC.get(str(mcc).zfill(4))):
         return mapped, "auto"
 
-    mapped = _PROVIDER.get(provider_category.upper()) if provider_category else None
-    if mapped and mapped != "Uncategorised":
+    if mapped := provider_category_name(provider_category):
         return mapped, "auto"
 
     if amount_minor > 0:
@@ -697,9 +938,14 @@ def _rule_matches(rule, target: str) -> bool:
         return False
     if rule.match_type == "exact":
         return target.strip() == pattern.strip()
+    if rule.match_type == "words":
+        # The pattern as whole words: "example homes" finds "example homes
+        # flat 2", but "pret" doesn't find "interpret".
+        return re.search(rf"(?<![a-z0-9]){re.escape(pattern.strip())}(?![a-z0-9])", target) is not None
     if rule.match_type == "regex":
         try:
-            return re.search(pattern, target, re.IGNORECASE) is not None
+            # As written: lower-casing would turn \S into \s.
+            return re.search(rule.pattern, target, re.IGNORECASE) is not None
         except re.error:
             return False
     return pattern in target

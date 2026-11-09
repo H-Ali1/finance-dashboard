@@ -12,7 +12,7 @@ from ..db import get_db
 from ..models import Account, Budget, CategoryRule, Transaction
 from ..money import to_major, to_minor
 from ..providers import ProviderError, csv_import
-from ..schemas import BudgetUpsert, RuleCreate, TransactionUpdate
+from ..schemas import BudgetUpsert, MerchantCategory, RuleCreate, TransactionUpdate
 from ..services.categorise import CATEGORIES, normalise_merchant
 from ..services.sync import recategorise_all, upsert_transactions
 from ..services.transfers import detect_transfers
@@ -141,8 +141,10 @@ def list_rules(db: Session = Depends(get_db)) -> dict:
 
 @router.post("/rules")
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
+    pattern = payload.pattern.strip()
     rule = CategoryRule(
-        pattern=payload.pattern.lower().strip(),
+        # A regex keeps its case: lower-casing would turn \S into \s.
+        pattern=pattern if payload.match_type == "regex" else pattern.lower(),
         match_type=payload.match_type,
         field=payload.field,
         category=payload.category,
@@ -162,6 +164,73 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)) -> dict:
     db.delete(rule)
     db.commit()
     return {"deleted": rule_id, "recategorised": recategorise_all(db)}
+
+
+# --- quick categorising ------------------------------------------------------
+@router.get("/categorise/uncategorised")
+def uncategorised_merchants(days: int = 180, limit: int = 40, db: Session = Depends(get_db)) -> dict:
+    """Uncategorised spending grouped by merchant, biggest first: the list to
+    work down, one merchant (and every future payment to it) at a time."""
+    since = dt.date.today() - dt.timedelta(days=max(days, 1))
+    rows = db.scalars(
+        select(Transaction)
+        .where(
+            Transaction.category == "Uncategorised",
+            Transaction.booked_on >= since,
+            Transaction.is_transfer.is_(False),
+            Transaction.excluded.is_(False),
+            Transaction.amount_minor < 0,
+        )
+        .order_by(Transaction.booked_on.desc())
+    )
+    accounts = {a.id: a for a in db.scalars(select(Account))}
+    groups: dict[str, dict] = {}
+    for txn in rows:
+        key = txn.merchant_key or normalise_merchant(txn.merchant) or txn.merchant.lower()
+        group = groups.get(key)
+        if group is None:  # newest first, so this is the latest payment
+            account = accounts.get(txn.account_id)
+            group = groups[key] = {
+                "merchant": txn.merchant,
+                "merchant_key": key,
+                "example": txn.description,
+                "last_date": txn.booked_on.isoformat(),
+                "account": account.name if account else "",
+                "transactions": 0,
+                "total_minor": 0,
+            }
+        group["transactions"] += 1
+        group["total_minor"] -= txn.amount_minor
+
+    ranked = sorted(groups.values(), key=lambda g: g["total_minor"], reverse=True)
+    total = sum(g["total_minor"] for g in ranked)
+    return {
+        "days": days,
+        "total": to_major(total),
+        "transactions": sum(g["transactions"] for g in ranked),
+        "merchant_count": len(ranked),
+        "merchants": [{**g, "total": to_major(g.pop("total_minor"))} for g in ranked[: max(limit, 0)]],
+    }
+
+
+@router.post("/categorise/merchant")
+def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)) -> dict:
+    """Put a merchant in a category, now and from now on: saves a rule on its
+    name and re-files its past transactions (ones you set by hand stay)."""
+    key = normalise_merchant(payload.merchant) or payload.merchant.strip().lower()
+    category = payload.category.strip()
+    # Whole words, so the rule follows the payee when a reference is added to
+    # the name, without catching other merchants that contain it.
+    match_type = "words"
+    rule = db.scalar(select(CategoryRule).where(CategoryRule.field == "merchant", CategoryRule.pattern == key).limit(1))
+    if rule is None:
+        rule = CategoryRule(pattern=key, field="merchant", match_type=match_type, category=category)
+        db.add(rule)
+    else:
+        rule.category = category
+        rule.match_type = match_type
+    db.commit()
+    return {"rule_id": rule.id, "pattern": key, "category": category, "recategorised": recategorise_all(db)}
 
 
 @router.post("/recategorise")

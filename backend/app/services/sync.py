@@ -32,7 +32,15 @@ def _now() -> dt.datetime:
 
 
 def _rules(db: Session) -> list[CategoryRule]:
-    return list(db.scalars(select(CategoryRule).order_by(CategoryRule.priority)))
+    """In priority order; at the same priority the longer, more specific
+    pattern goes first ("amazon prime" before "amazon")."""
+    return list(
+        db.scalars(
+            select(CategoryRule).order_by(
+                CategoryRule.priority, func.length(CategoryRule.pattern).desc(), CategoryRule.id
+            )
+        )
+    )
 
 
 def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Connection | None) -> Account:
@@ -59,48 +67,56 @@ def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Conn
     return account
 
 
+# Rows saved before payment types were kept (schema v3) get theirs from one
+# longer read: as far back as each provider allows without asking you again.
+TYPE_BACKFILL_DAYS = {"starling": DEFAULT_LOOKBACK_DAYS, "truelayer": truelayer.HISTORY_DAYS[-1]}
+
+
 def _since_for(db: Session, account: Account) -> dt.date:
     latest = db.scalar(select(func.max(Transaction.booked_on)).where(Transaction.account_id == account.id))
-    if latest:
-        return latest - dt.timedelta(days=OVERLAP_DAYS)
-    return dt.date.today() - dt.timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    today = dt.date.today()
+    if not latest:
+        return today - dt.timedelta(days=DEFAULT_LOOKBACK_DAYS)
+    since = latest - dt.timedelta(days=OVERLAP_DAYS)
+    backfill = TYPE_BACKFILL_DAYS.get(account.provider)
+    if backfill and not (account.provider_meta or {}).get("payment_types"):
+        since = min(since, today - dt.timedelta(days=backfill))
+    return since
+
+
+def _mark_read(db: Session, account: Account) -> None:
+    """This account's rows now carry payment types; no more long reads."""
+    if not (account.provider_meta or {}).get("payment_types"):
+        account.provider_meta = {**(account.provider_meta or {}), "payment_types": True}
+        db.commit()
 
 
 def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction]) -> int:
     if not raws:
         return 0
     rules = _rules(db)
-    existing = {
-        row[0] for row in db.execute(select(Transaction.external_id).where(Transaction.account_id == account.id))
-    }
+    existing = {t.external_id: t for t in db.scalars(select(Transaction).where(Transaction.account_id == account.id))}
 
     added = 0
     for raw in raws:
         merchant_key = normalise_merchant(raw.merchant or raw.description)
-        if raw.external_id in existing:
-            txn = db.scalar(
-                select(Transaction).where(
-                    Transaction.account_id == account.id,
-                    Transaction.external_id == raw.external_id,
-                )
-            )
-            if txn is None:
-                continue
-            # A pending row that settled, or a statement re-imported with its
-            # signs corrected: refresh amount/status, keep user edits.
-            sign_changed = (txn.amount_minor < 0) != (raw.amount_minor < 0)
+        txn = existing.get(raw.external_id)
+        if txn is not None:
+            # A pending row that settled, a statement re-imported with its
+            # signs corrected, or an older row the bank now describes more
+            # fully: refresh what the bank says, keep user edits.
+            changed = (txn.amount_minor < 0) != (raw.amount_minor < 0)
             txn.amount_minor = raw.amount_minor
             txn.status = raw.status
             txn.booked_on = raw.booked_on
-            if sign_changed and txn.category_source != "manual" and not txn.is_transfer:
-                txn.category, txn.category_source = categorise(
-                    merchant=txn.merchant,
-                    description=txn.description,
-                    amount_minor=txn.amount_minor,
-                    mcc=txn.mcc,
-                    provider_category=txn.provider_category,
-                    rules=rules,
-                )
+            if raw.payment_type and raw.payment_type != txn.payment_type:
+                txn.payment_type = raw.payment_type
+                changed = True
+            if raw.provider_category and raw.provider_category != txn.provider_category:
+                txn.provider_category = raw.provider_category
+                changed = True
+            if changed and txn.category_source != "manual" and not txn.is_transfer:
+                txn.category, txn.category_source = _categorise_row(txn, rules)
             continue
 
         category, source = categorise(
@@ -109,27 +125,28 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
             amount_minor=raw.amount_minor,
             mcc=raw.mcc,
             provider_category=raw.provider_category,
+            payment_type=raw.payment_type,
             rules=rules,
         )
-        db.add(
-            Transaction(
-                account_id=account.id,
-                external_id=raw.external_id,
-                booked_on=raw.booked_on,
-                booked_at=raw.booked_at,
-                amount_minor=raw.amount_minor,
-                currency=raw.currency,
-                description=raw.description,
-                merchant=display_merchant(raw.merchant or raw.description),
-                merchant_key=merchant_key,
-                category=category,
-                category_source=source,
-                provider_category=raw.provider_category,
-                mcc=raw.mcc,
-                status=raw.status,
-            )
+        txn = Transaction(
+            account_id=account.id,
+            external_id=raw.external_id,
+            booked_on=raw.booked_on,
+            booked_at=raw.booked_at,
+            amount_minor=raw.amount_minor,
+            currency=raw.currency,
+            description=raw.description,
+            merchant=display_merchant(raw.merchant or raw.description),
+            merchant_key=merchant_key,
+            category=category,
+            category_source=source,
+            provider_category=raw.provider_category,
+            mcc=raw.mcc,
+            status=raw.status,
+            payment_type=raw.payment_type,
         )
-        existing.add(raw.external_id)
+        db.add(txn)
+        existing[raw.external_id] = txn  # the same row twice in one batch is one row
         added += 1
 
     db.commit()
@@ -172,6 +189,7 @@ def sync_starling(db: Session) -> dict:
             account = upsert_account(db, "starling", raw, connection)
             txns = starling.fetch_transactions(raw, _since_for(db, account))
             added += upsert_transactions(db, account, txns)
+            _mark_read(db, account)
         connection.status = "linked"
         connection.last_synced_at = _now()
         connection.last_error = None
@@ -258,6 +276,7 @@ def sync_truelayer(
             account = upsert_account(db, "truelayer", raw, connection)
             txns = truelayer.fetch_transactions(tokens.access_token, raw, _since_for(db, account), psu_ip)
             added += upsert_transactions(db, account, txns)
+            _mark_read(db, account)
         connection.status = "linked"
         connection.last_synced_at = _now()
         connection.last_error = None
@@ -351,6 +370,8 @@ def sync_all(db: Session, *, unattended: bool = False, psu_ip: str | None = None
                 results.append(sync_truelayer(db, connection, psu_ip=psu_ip))
 
         pairs = detect_transfers(db)
+        # Rules and categoriser improvements reach older rows too, not only new ones.
+        recategorise_all(db)
         from ..analytics.networth import snapshot_networth  # local import avoids a cycle
 
         snapshot_networth(db)
@@ -362,6 +383,18 @@ def sync_all(db: Session, *, unattended: bool = False, psu_ip: str | None = None
     }
 
 
+def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, str]:
+    return categorise(
+        merchant=txn.merchant,
+        description=txn.description,
+        amount_minor=txn.amount_minor,
+        mcc=txn.mcc,
+        provider_category=txn.provider_category,
+        payment_type=txn.payment_type,
+        rules=rules,
+    )
+
+
 def recategorise_all(db: Session, *, include_manual: bool = False) -> int:
     """Re-run categorisation, e.g. after adding a rule."""
     rules = _rules(db)
@@ -371,14 +404,7 @@ def recategorise_all(db: Session, *, include_manual: bool = False) -> int:
             continue
         if txn.is_transfer:
             continue
-        category, source = categorise(
-            merchant=txn.merchant,
-            description=txn.description,
-            amount_minor=txn.amount_minor,
-            mcc=txn.mcc,
-            provider_category=txn.provider_category,
-            rules=rules,
-        )
+        category, source = _categorise_row(txn, rules)
         if category != txn.category:
             txn.category = category
             txn.category_source = source

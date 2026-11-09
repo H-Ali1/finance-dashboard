@@ -152,6 +152,7 @@ def fetch_transactions(account: RawAccount | dict, since: dt.date) -> list[RawTr
         when = _parse_ts(item.get("transactionTime") or item.get("updatedAt"))
         counterparty = item.get("counterPartyName") or ""
         reference = item.get("reference") or ""
+        payment_type = _payment_type(item.get("source"), item.get("sourceSubType"))
         out.append(
             RawTransaction(
                 external_id=item["feedItemUid"],
@@ -163,9 +164,45 @@ def fetch_transactions(account: RawAccount | dict, since: dt.date) -> list[RawTr
                 merchant=counterparty or reference,
                 provider_category=item.get("spendingCategory"),
                 status="pending" if status == "PENDING" else "booked",
+                payment_type=payment_type,
             )
         )
     return out
+
+
+# Starling's `source`: how the money moved.
+_SOURCES = {
+    "MASTER_CARD": "card",
+    "MASTERCARD_CHARGEBACK": "card",
+    "DIRECT_DEBIT": "direct_debit",
+    "DIRECT_DEBIT_DISPUTE": "direct_debit",
+    "SEPA_DIRECT_DEBIT": "direct_debit",
+    "FASTER_PAYMENTS_IN": "transfer",
+    "FASTER_PAYMENTS_OUT": "transfer",
+    "FASTER_PAYMENTS_REVERSAL": "transfer",
+    "FASTER_PAYMENTS_REFUND": "transfer",
+    "DIRECT_CREDIT": "transfer",  # BACS, which is how most salaries arrive
+    "CHAPS": "transfer",
+    "ON_US_PAY_ME": "transfer",
+    "SEPA_CREDIT_TRANSFER": "transfer",
+    "SEPA_INSTANT_CREDIT_TRANSFER": "transfer",
+    "INTERNAL_TRANSFER": "internal",
+    "INTEREST_PAYMENT": "interest",
+    "OVERDRAFT": "interest",
+    "CARD_FEE_CHARGE": "fee",
+    "CASH_DEPOSIT_CHARGE": "fee",
+    "CASH_WITHDRAWAL_CHARGE": "fee",
+    "MISSED_PAYMENT_FEE": "fee",
+}
+
+
+def _payment_type(source: str | None, sub_type: str | None) -> str | None:
+    sub = (sub_type or "").upper()
+    if sub == "ATM":
+        return "cash"
+    if sub == "STANDING_ORDER":
+        return "standing_order"
+    return _SOURCES.get((source or "").upper())
 
 
 def _iso(value: dt.datetime) -> str:

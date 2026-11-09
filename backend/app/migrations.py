@@ -50,9 +50,20 @@ def _v2_connection_credentials(conn: Connection) -> None:
             conn.exec_driver_sql(f"ALTER TABLE connections ADD COLUMN {name} {ddl}")
 
 
+def _v3_payment_type(conn: Connection) -> None:
+    """What kind of payment each transaction was (card, standing order, ...).
+    Existing rows stay empty until their bank sends them again."""
+    inspector = inspect(conn)
+    if "transactions" not in inspector.get_table_names():
+        return
+    if "payment_type" not in {col["name"] for col in inspector.get_columns("transactions")}:
+        conn.exec_driver_sql("ALTER TABLE transactions ADD COLUMN payment_type VARCHAR(16)")
+
+
 STEPS: list[Callable[[Connection], None]] = [
     _v1_baseline,
     _v2_connection_credentials,
+    _v3_payment_type,
 ]
 LATEST = len(STEPS)
 

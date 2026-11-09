@@ -34,3 +34,4 @@ class RawTransaction:
     provider_category: str | None = None
     mcc: str | None = None
     status: str = "booked"
+    payment_type: str | None = None  # see categorise.PAYMENT_TYPES
