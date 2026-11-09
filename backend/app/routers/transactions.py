@@ -14,8 +14,8 @@ from ..money import to_major, to_minor
 from ..providers import ProviderError, csv_import
 from ..schemas import BudgetUpsert, MerchantCategory, RuleCreate, TransactionUpdate
 from ..services.categorise import CATEGORIES, normalise_merchant
-from ..services.sync import recategorise_all, upsert_transactions
-from ..services.transfers import detect_transfers
+from ..services.sync import categorise_one, recategorise_all, upsert_transactions
+from ..services.transfers import NOT_A_TRANSFER, detect_transfers
 
 router = APIRouter(prefix="/api", tags=["transactions"])
 
@@ -28,6 +28,7 @@ def _serialise(txn: Transaction, accounts: dict[int, Account]) -> dict:
         "amount": to_major(txn.amount_minor),
         "currency": txn.currency,
         "merchant": txn.merchant,
+        "merchant_key": txn.merchant_key,
         "description": txn.description,
         "category": txn.category,
         "category_source": txn.category_source,
@@ -107,8 +108,12 @@ def update_transaction(transaction_id: int, payload: TransactionUpdate, db: Sess
         txn.notes = payload.notes
     if payload.excluded is not None:
         txn.excluded = payload.excluded
-    if payload.is_transfer is not None:
+    if payload.is_transfer is not None and payload.is_transfer != txn.is_transfer:
         txn.is_transfer = payload.is_transfer
+        # Your say is final: never paired again, or kept out of the totals for good.
+        txn.transfer_group = None if payload.is_transfer else NOT_A_TRANSFER
+        if txn.category_source != "manual":
+            txn.category = "Transfers" if payload.is_transfer else categorise_one(db, txn)
     db.commit()
     accounts = {a.id: a for a in db.scalars(select(Account))}
     return _serialise(txn, accounts)
@@ -217,7 +222,9 @@ def uncategorised_merchants(days: int = 180, limit: int = 40, db: Session = Depe
 def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)) -> dict:
     """Put a merchant in a category, now and from now on: saves a rule on its
     name and re-files its past transactions (ones you set by hand stay)."""
-    key = normalise_merchant(payload.merchant) or payload.merchant.strip().lower()
+    key = (payload.merchant_key or "").strip().lower() or (
+        normalise_merchant(payload.merchant) or payload.merchant.strip().lower()
+    )
     category = payload.category.strip()
     # Whole words, so the rule follows the payee when a reference is added to
     # the name, without catching other merchants that contain it.
@@ -332,6 +339,7 @@ async def import_csv(
 
     added = upsert_transactions(db, account, rows)
     pairs = detect_transfers(db)
+    recategorise_all(db)
 
     # Statement files carry a running balance we deliberately don't parse (the
     # column is inconsistent across banks); the closing balance is supplied by

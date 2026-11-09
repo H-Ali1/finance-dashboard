@@ -13,12 +13,12 @@ from ..money import to_major
 from .common import (
     days_in_month,
     is_income,
-    is_spend,
     load_transactions,
     month_bounds,
     month_key,
     month_keys_back,
     project_month_total,
+    spend_value,
 )
 from .networth import compute_networth
 from .recurring import detect_recurring, recurring_keys, upcoming
@@ -35,8 +35,7 @@ def _month_totals(db: Session, months: int, fixed_keys: set[str]) -> dict[str, d
         key = month_key(txn.booked_on)
         if key not in totals:
             continue
-        if is_spend(txn):
-            amount = -txn.amount_minor
+        if amount := spend_value(txn):  # refunds take away
             totals[key]["spend"] += amount
             totals[key]["essential" if txn.category in essentials else "discretionary"] += amount
             is_fixed = (txn.merchant_key or txn.merchant.lower()) in fixed_keys
@@ -156,8 +155,8 @@ def daily_burn(db: Session, days: int = 60) -> dict:
     txns = load_transactions(db, start=start)
     per_day: dict[str, int] = defaultdict(int)
     for txn in txns:
-        if is_spend(txn):
-            per_day[txn.booked_on.isoformat()] += -txn.amount_minor
+        if value := spend_value(txn):
+            per_day[txn.booked_on.isoformat()] += value
 
     series = []
     running = 0

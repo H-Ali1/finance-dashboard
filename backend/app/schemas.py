@@ -16,6 +16,10 @@ class AccountUpdate(BaseModel):
         default=None,
         description="Set when a provider reports spend as positive (some card issuers do).",
     )
+    income_default: str | None = Field(
+        default=None,
+        description='"Tutoring": bank transfers from people into this account are tutoring. "" turns it off.',
+    )
 
 
 class TransactionUpdate(BaseModel):
@@ -40,6 +44,8 @@ class MerchantCategory(BaseModel):
 
     merchant: str = Field(min_length=1, max_length=160)
     category: str = Field(min_length=1, max_length=48)
+    # The stored key, as the list gave it: used as is, not worked out again.
+    merchant_key: str | None = Field(default=None, max_length=160)
 
 
 class BudgetUpsert(BaseModel):

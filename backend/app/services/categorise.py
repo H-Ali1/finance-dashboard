@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 
 CATEGORIES = [
+    "Salary",
+    "Tutoring",
     "Income",
     "Groceries",
     "Eating Out",
@@ -44,6 +46,12 @@ CATEGORIES = [
     "Transfers",
     "Uncategorised",
 ]
+
+# Money in that is income. "Income" is everything else that's earned or
+# given: interest, benefits, dividends, a tax rebate.
+INCOME_CATEGORIES = {"Salary", "Tutoring", "Income"}
+# Money moving between your own pots: neither spending nor income.
+NOT_SPENDING_OR_INCOME = {"Transfers", "Savings & Investments"}
 
 # What kind of payment it was, in one vocabulary for every provider. Banks
 # say it in their own words (Starling's `source`, TrueLayer's
@@ -732,24 +740,50 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ),
 ]
 
-# Words that only ever mean money coming in. Paying HMRC is tax, not income,
-# so these count for money arriving only.
-_INCOME_KEYWORDS: tuple[str, ...] = (
-    "salary",
-    "payroll",
-    "wages",
-    "hmrc",
-    "dwp",
-    "universal credit",
-    "child benefit",
-    "tax credit",
-    "dividend",
-    "refund",
-    "reimbursement",
-    "bonus",
-    "stipend",
-    "grant",
-)
+# Words that mean income when money comes in. Paying HMRC is tax, and
+# paying for a lesson is education, so these count for money arriving only.
+_INCOME_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("Salary", ("salary", "salaries", "payroll", "wages", "bonus", "net pay")),
+    (
+        "Tutoring",
+        (
+            "tutor",
+            "tutoring",
+            "tuition",
+            "lesson",
+            "maths",
+            "math",
+            "english",
+            "physics",
+            "chemistry",
+            "biology",
+            "science",
+            "gcse",
+            "a level",
+            "11 plus",
+            "eleven plus",
+            "revision",
+            "homework",
+        ),
+    ),
+    (
+        "Income",
+        (
+            "hmrc",
+            "dwp",
+            "universal credit",
+            "child benefit",
+            "tax credit",
+            "dividend",
+            "interest",
+            "cashback",
+            "stipend",
+            "grant",
+        ),
+    ),
+]
+# Money back for something you bought: it reduces that spending, it isn't income.
+_REFUND_WORDS: tuple[str, ...] = ("refund", "reimbursement", "reversal", "chargeback")
 
 
 def _words(text: str) -> str:
@@ -768,7 +802,8 @@ def _compile(keywords: list[tuple[str, tuple[str, ...]]]) -> tuple[re.Pattern[st
 
 
 _SPEND_PATTERN, _SPEND_OWNER = _compile(_KEYWORDS)
-_INCOME_PATTERN, _INCOME_OWNER = _compile([("Income", _INCOME_KEYWORDS)])
+_INCOME_PATTERN, _INCOME_OWNER = _compile(_INCOME_KEYWORDS)
+_REFUND_PATTERN, _REFUND_OWNER = _compile([("refund", _REFUND_WORDS)])
 
 
 def _first_keyword(pattern: re.Pattern[str], owner: dict[str, str], words: str) -> str | None:
@@ -894,15 +929,26 @@ def categorise(
     provider_category: str | None = None,
     payment_type: str | None = None,
     rules: list | None = None,
+    merchant_key: str | None = None,
 ) -> tuple[str, str]:
-    """Returns (category, source)."""
-    merchant_key = normalise_merchant(merchant or description)
+    """Returns (category, source). Pass the stored `merchant_key` for a saved
+    transaction, so rules see the key they were made from.
+
+    Money in is income only when it's earned or given. Money back from a
+    shop is a refund: it keeps the shop's category, so it reduces that
+    spending instead of looking like income."""
+    merchant_key = merchant_key or normalise_merchant(merchant or description)
     description_key = (description or "").lower()
+    money_in = amount_minor > 0
 
     # A name in a script other than Latin normalises to nothing; rules then
     # match the name as written.
     rule_merchant = merchant_key or (merchant or description or "").strip().lower()
     for rule in rules or []:
+        # A rule that says "this payer is tutoring" is about money they send
+        # you, not money you send them.
+        if rule.category in INCOME_CATEGORIES and not money_in:
+            continue
         target = rule_merchant if rule.field == "merchant" else description_key
         if _rule_matches(rule, target):
             return rule.category, "rule"
@@ -912,24 +958,32 @@ def categorise(
 
     # The bank's own wording first: "UBER *EATS" says more than the "uber" key.
     words = _words(f"{description_key} {merchant_key}")
-    if amount_minor > 0 and _first_keyword(_INCOME_PATTERN, _INCOME_OWNER, words):
+    refund = _first_keyword(_REFUND_PATTERN, _REFUND_OWNER, words) is not None
+    income = _first_keyword(_INCOME_PATTERN, _INCOME_OWNER, words) if money_in else None
+    # "LESSON REFUND" is money back, not tutoring; a tax refund is still income.
+    if income and (income == "Income" or not refund):
+        return income, "auto"
+
+    spent_on = (
+        _first_keyword(_SPEND_PATTERN, _SPEND_OWNER, words)
+        or (_MCC.get(str(mcc).zfill(4)) if mcc else None)
+        or provider_category_name(provider_category)
+    )
+    if not money_in:
+        return spent_on or "Uncategorised", "auto"
+
+    if spent_on in NOT_SPENDING_OR_INCOME or spent_on in INCOME_CATEGORIES:
+        return spent_on, "auto"
+    # The bank calls a bank transfer income, and nothing says refund: income,
+    # even from a payer whose name is also a shop's (an employer like a supermarket).
+    if not refund and payment_type != "card" and provider_category_name(provider_category) == "Income":
         return "Income", "auto"
-
-    if match := _first_keyword(_SPEND_PATTERN, _SPEND_OWNER, words):
-        # An inbound payment matching a spend keyword is almost always a refund.
-        if amount_minor > 0 and match not in {"Income", "Transfers", "Savings & Investments"}:
-            return "Income", "auto"
-        return match, "auto"
-
-    if mcc and (mapped := _MCC.get(str(mcc).zfill(4))):
-        return mapped, "auto"
-
-    if mapped := provider_category_name(provider_category):
-        return mapped, "auto"
-
-    if amount_minor > 0:
-        return "Income", "auto"
-    return "Uncategorised", "auto"
+    refund = refund or payment_type == "card"
+    if spent_on:
+        return spent_on, "auto"  # money back from somewhere you spend: a refund
+    if refund:
+        return "Uncategorised", "auto"  # a refund, but of what isn't known
+    return "Income", "auto"
 
 
 def _rule_matches(rule, target: str) -> bool:
