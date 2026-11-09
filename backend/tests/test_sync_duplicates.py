@@ -288,3 +288,15 @@ def test_one_rule_per_pattern(tmp_path):
         db.commit()
     db.close()
     engine.dispose()
+
+
+def test_choosing_a_category_for_a_merchant_replaces_older_rules_on_its_name(fresh_db):
+    from app.models import CategoryRule
+    from app.routers.transactions import categorise_merchant
+    from app.schemas import MerchantCategory
+
+    fresh_db.add(CategoryRule(pattern="example gym", match_type="contains", field="merchant", category="Shopping"))
+    fresh_db.commit()
+    categorise_merchant(MerchantCategory(merchant="Example Gym", category="Health & Fitness"), db=fresh_db)
+    rules = fresh_db.scalars(select(CategoryRule)).all()
+    assert [(r.match_type, r.category) for r in rules] == [("words", "Health & Fitness")]
