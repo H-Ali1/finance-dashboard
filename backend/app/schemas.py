@@ -44,6 +44,8 @@ class MerchantCategory(BaseModel):
 
     merchant: str = Field(min_length=1, max_length=160)
     category: str = Field(min_length=1, max_length=48)
+    # The stored key, as the list gave it: used as is, not worked out again.
+    merchant_key: str | None = Field(default=None, max_length=160)
 
 
 class BudgetUpsert(BaseModel):

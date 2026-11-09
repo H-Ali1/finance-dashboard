@@ -27,7 +27,8 @@ export default function NeedsCategory({ onChange }: { onChange: () => void }) {
     setBusy(row.merchant_key);
     try {
       const result = await api.post<{ recategorised: number }>("/api/categorise/merchant", {
-        merchant: row.merchant_key,
+        merchant: row.merchant,
+        merchant_key: row.merchant_key,
         category,
       });
       setMessage(

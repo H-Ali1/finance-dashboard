@@ -25,7 +25,7 @@ export default function Transactions() {
   const [version, setVersion] = useState(0);
   const [ruleFor, setRuleFor] = useState<Transaction | null>(null);
   // After one transaction is re-filed: offer the same for the whole merchant.
-  const [offer, setOffer] = useState<{ merchant: string; category: string } | null>(null);
+  const [offer, setOffer] = useState<{ merchant: string; merchant_key: string; category: string } | null>(null);
   const [offerResult, setOfferResult] = useState<string | null>(null);
 
   const params = new URLSearchParams({
@@ -56,7 +56,7 @@ export default function Transactions() {
 
   const setCategoryFor = async (txn: Transaction, next: string) => {
     await api.patch(`/api/transactions/${txn.id}`, { category: next });
-    setOffer({ merchant: txn.merchant, category: next });
+    setOffer({ merchant: txn.merchant, merchant_key: txn.merchant_key, category: next });
     setOfferResult(null);
     refresh();
   };

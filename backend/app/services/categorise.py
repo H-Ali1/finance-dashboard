@@ -929,13 +929,15 @@ def categorise(
     provider_category: str | None = None,
     payment_type: str | None = None,
     rules: list | None = None,
+    merchant_key: str | None = None,
 ) -> tuple[str, str]:
-    """Returns (category, source).
+    """Returns (category, source). Pass the stored `merchant_key` for a saved
+    transaction, so rules see the key they were made from.
 
     Money in is income only when it's earned or given. Money back from a
     shop is a refund: it keeps the shop's category, so it reduces that
     spending instead of looking like income."""
-    merchant_key = normalise_merchant(merchant or description)
+    merchant_key = merchant_key or normalise_merchant(merchant or description)
     description_key = (description or "").lower()
     money_in = amount_minor > 0
 
@@ -956,7 +958,10 @@ def categorise(
 
     # The bank's own wording first: "UBER *EATS" says more than the "uber" key.
     words = _words(f"{description_key} {merchant_key}")
-    if money_in and (income := _first_keyword(_INCOME_PATTERN, _INCOME_OWNER, words)):
+    refund = _first_keyword(_REFUND_PATTERN, _REFUND_OWNER, words) is not None
+    income = _first_keyword(_INCOME_PATTERN, _INCOME_OWNER, words) if money_in else None
+    # "LESSON REFUND" is money back, not tutoring; a tax refund is still income.
+    if income and (income == "Income" or not refund):
         return income, "auto"
 
     spent_on = (
@@ -969,7 +974,7 @@ def categorise(
 
     if spent_on in NOT_SPENDING_OR_INCOME or spent_on in INCOME_CATEGORIES:
         return spent_on, "auto"
-    refund = payment_type == "card" or _first_keyword(_REFUND_PATTERN, _REFUND_OWNER, words) is not None
+    refund = refund or payment_type == "card"
     if spent_on:
         return spent_on, "auto"  # money back from somewhere you spend: a refund
     if refund:

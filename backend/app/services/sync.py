@@ -128,6 +128,7 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
             provider_category=raw.provider_category,
             payment_type=raw.payment_type,
             rules=rules,
+            merchant_key=merchant_key,
         )
         txn = Transaction(
             account_id=account.id,
@@ -394,6 +395,7 @@ def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, s
         provider_category=txn.provider_category,
         payment_type=txn.payment_type,
         rules=rules,
+        merchant_key=txn.merchant_key,
     )
 
 

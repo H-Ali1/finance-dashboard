@@ -28,6 +28,7 @@ def _serialise(txn: Transaction, accounts: dict[int, Account]) -> dict:
         "amount": to_major(txn.amount_minor),
         "currency": txn.currency,
         "merchant": txn.merchant,
+        "merchant_key": txn.merchant_key,
         "description": txn.description,
         "category": txn.category,
         "category_source": txn.category_source,
@@ -221,7 +222,9 @@ def uncategorised_merchants(days: int = 180, limit: int = 40, db: Session = Depe
 def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)) -> dict:
     """Put a merchant in a category, now and from now on: saves a rule on its
     name and re-files its past transactions (ones you set by hand stay)."""
-    key = normalise_merchant(payload.merchant) or payload.merchant.strip().lower()
+    key = (payload.merchant_key or "").strip().lower() or (
+        normalise_merchant(payload.merchant) or payload.merchant.strip().lower()
+    )
     category = payload.category.strip()
     # Whole words, so the rule follows the payee when a reference is added to
     # the name, without catching other merchants that contain it.

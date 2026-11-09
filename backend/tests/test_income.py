@@ -15,6 +15,9 @@ from app.analytics import income as income_mod
 from app.analytics import spending
 from app.models import Account, CategoryRule, Transaction
 from app.providers.base import RawTransaction
+from app.routers.transactions import categorise_merchant
+from app.schemas import MerchantCategory
+from app.services import income as income_service
 from app.services import sync as sync_service
 from app.services.categorise import categorise
 from app.services.transfers import NOT_A_TRANSFER, detect_transfers
@@ -195,3 +198,52 @@ def test_income_endpoint(client):
     data = client.get("/api/income", params={"months": 6}).json()
     assert [s["label"] for s in data["sources"]] == ["Salary", "Tutoring", "Other income"]
     assert len(data["series"]) == 6
+
+
+def test_a_refund_mentioning_a_lesson_is_not_tutoring():
+    assert categorise(merchant="DRIVING LESSON REFUND", description="", amount_minor=3500)[0] != "Tutoring"
+    assert categorise(merchant="UNIVERSITY TUITION FEE REFUND", description="", amount_minor=9000)[0] == "Education"
+    assert categorise(merchant="HMRC TAX REFUND", description="", amount_minor=21240)[0] == "Income"
+
+
+def test_one_transfer_pair_does_not_make_a_name_yours(fresh_db):
+    """You pay someone £60 and they pay you £60 the same day: one pair, two
+    rows with their name. That isn't enough to call the name yours."""
+    starling = Account(provider="starling", external_id="st", name="Starling", kind="current")
+    hsbc = Account(provider="truelayer", external_id="hs", name="HSBC", kind="current")
+    fresh_db.add_all([starling, hsbc])
+    fresh_db.commit()
+    sync_service.upsert_transactions(fresh_db, starling, [_raw("o", TODAY, -60.00, "R JONES", "transfer")])
+    sync_service.upsert_transactions(fresh_db, hsbc, [_raw("i", TODAY, 60.00, "R JONES", "transfer")])
+    detect_transfers(fresh_db)
+    rows = list(fresh_db.scalars(select(Transaction)))
+    assert income_service.own_names(rows) == set()
+
+    day = TODAY - dt.timedelta(days=10)
+    sync_service.upsert_transactions(fresh_db, starling, [_raw("o2", day, -75.00, "R JONES", "transfer")])
+    sync_service.upsert_transactions(fresh_db, hsbc, [_raw("i2", day, 75.00, "R JONES", "transfer")])
+    detect_transfers(fresh_db)
+    assert income_service.own_names(list(fresh_db.scalars(select(Transaction)))) == {"r jones"}
+
+
+def test_a_payer_rule_uses_the_stored_name(fresh_db):
+    """A stored name can contain words that normalising would strip again;
+    the rule must be on the name as stored, and touch no one else."""
+    hsbc = Account(provider="truelayer", external_id="hs", name="HSBC", kind="current")
+    fresh_db.add(hsbc)
+    fresh_db.commit()
+    sync_service.upsert_transactions(
+        fresh_db,
+        hsbc,
+        [
+            _raw("a", TODAY, 40.00, "ALICE PAYMENT-FROM SMITH", "transfer"),
+            _raw("b", TODAY, 25.00, "ALICE SMITH", "transfer"),
+        ],
+    )
+    stored = fresh_db.scalar(select(Transaction).where(Transaction.external_id == "a")).merchant_key
+    assert stored == "alice payment from smith"
+    saved = categorise_merchant(
+        MerchantCategory(merchant="Alice Payment From Smith", merchant_key=stored, category="Tutoring"), db=fresh_db
+    )
+    assert saved["pattern"] == stored
+    assert _categories(fresh_db) == {"a": "Tutoring", "b": "Income"}

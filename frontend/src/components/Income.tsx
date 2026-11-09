@@ -158,19 +158,25 @@ function TutoringAccount({ accounts, onChange }: { accounts: Account[]; onChange
   const marked = current.find((a) => a.income_default === "Tutoring");
   const [choice, setChoice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const value = choice ?? (marked ? String(marked.id) : "");
 
   const save = async () => {
     setSaving(true);
+    setError(null);
     try {
+      // Mark the new account before clearing the old, so a failure part way
+      // never leaves no account marked.
+      if (value) await api.patch(`/api/accounts/${value}`, { income_default: "Tutoring" });
       if (marked && String(marked.id) !== value) {
         await api.patch(`/api/accounts/${marked.id}`, { income_default: "" });
       }
-      if (value) await api.patch(`/api/accounts/${value}`, { income_default: "Tutoring" });
       setChoice(null);
-      onChange();
+    } catch (err) {
+      setError(`Not saved: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSaving(false);
+      onChange(); // show what was actually saved
     }
   };
 
@@ -192,6 +198,11 @@ function TutoringAccount({ accounts, onChange }: { accounts: Account[]; onChange
           {saving ? "Saving…" : "Save"}
         </button>
       </div>
+      {error && (
+        <div className="secondary tiny" style={{ marginTop: 10 }} role="alert">
+          {error}
+        </div>
+      )}
     </Card>
   );
 }
@@ -204,7 +215,8 @@ function Payers({ payers, onChange }: { payers: IncomePayer[]; onChange: () => v
     setBusy(payer.merchant_key);
     try {
       const result = await api.post<{ recategorised: number }>("/api/categorise/merchant", {
-        merchant: payer.merchant_key,
+        merchant: payer.payer,
+        merchant_key: payer.merchant_key,
         category,
       });
       const label = CHOICES.find((c) => c.value === category)?.label ?? category;

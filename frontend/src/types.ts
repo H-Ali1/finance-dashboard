@@ -295,6 +295,7 @@ export interface Transaction {
   amount: number;
   currency: string;
   merchant: string;
+  merchant_key: string;
   description: string;
   category: string;
   category_source: string;

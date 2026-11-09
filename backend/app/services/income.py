@@ -45,14 +45,14 @@ def _payer(txn: Transaction) -> str:
 
 
 def own_names(rows: list[Transaction]) -> set[str]:
-    """Names on two or more transfers the app matched between your accounts:
-    yours. Your name paying in from an account that isn't connected is then
-    you, not income."""
-    seen: dict[str, int] = defaultdict(int)
+    """Names on two or more separate transfers the app matched between your
+    accounts: yours (both halves of one transfer count once). Your name
+    paying in from an account that isn't connected is then you, not income."""
+    seen: dict[str, set[str]] = defaultdict(set)
     for txn in rows:
         if txn.is_transfer and (txn.transfer_group or "").startswith("tr_") and (key := _payer(txn)):
-            seen[key] += 1
-    return {key for key, count in seen.items() if count >= 2}
+            seen[key].add(txn.transfer_group)
+    return {key for key, groups in seen.items() if len(groups) >= 2}
 
 
 def _paid_like_a_salary(payments: list[Transaction]) -> bool:

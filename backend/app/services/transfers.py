@@ -28,7 +28,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Account, Transaction
-from .categorise import categorise
 
 WINDOW_DAYS = 4
 SAME_DAY_WINDOW = 1
@@ -99,19 +98,11 @@ def detect_transfers(db: Session, since: dt.date | None = None) -> int:
     # Pairs that no longer hold go back to the category they'd otherwise have.
     unpaired = [t for t in previously_paired if not t.is_transfer and t.category_source != "manual"]
     if unpaired:
-        from .sync import _rules  # sync imports this module
+        from .sync import _categorise_row, _rules  # sync imports this module
 
         rules = _rules(db)
         for txn in unpaired:
-            txn.category, txn.category_source = categorise(
-                merchant=txn.merchant,
-                description=txn.description,
-                amount_minor=txn.amount_minor,
-                mcc=txn.mcc,
-                provider_category=txn.provider_category,
-                payment_type=txn.payment_type,
-                rules=rules,
-            )
+            txn.category, txn.category_source = _categorise_row(txn, rules)
 
     db.commit()
     return paired
