@@ -19,7 +19,7 @@ on a Home Assistant Green, a small Raspberry Pi.
 ## Architecture
 
 ```mermaid
-%%{init: {'layout': 'dagre', 'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#8c959f', 'clusterBkg': '#ffffff00', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
+%%{init: {'layout': 'dagre', 'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
 flowchart TB
     user["User"] <--> tunnel["Cloudflare Tunnel"] <--> ha
 
