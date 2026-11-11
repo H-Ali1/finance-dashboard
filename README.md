@@ -9,6 +9,8 @@ in the Home Assistant sidebar.**
 [![CI](https://github.com/H-Ali1/finance-dashboard/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/H-Ali1/finance-dashboard/actions/workflows/ci.yml)
 [![Home Assistant App](https://img.shields.io/badge/Home%20Assistant-App-41BDF5?logo=homeassistant&logoColor=white)](homeassistant/DOCS.md)
 [![Platforms](https://img.shields.io/badge/platforms-aarch64%20%7C%20amd64-555)](#requirements)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-555)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/hali1)
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FH-Ali1%2Ffinance-dashboard%23ha-release)
 
@@ -203,6 +205,10 @@ frontend/src/     the React app
 homeassistant/    the Home Assistant App definition and its docs
 Dockerfile        one image for Home Assistant, Docker and Kubernetes
 ```
+
+## Licence
+
+Released under the [MIT License](LICENSE).
 
 ## Disclaimer
 
