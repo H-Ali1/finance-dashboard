@@ -35,7 +35,8 @@ SAME_DAY_WINDOW = 1
 MIN_MINOR = 500
 # Accounts where money only arrives from (or goes to) your own accounts.
 OWN_MONEY_KINDS = {"credit_card", "savings", "investment", "loan", "mortgage"}
-_TRANSFER_WORDS = re.compile(r"\b(transfer|trf|tfr|own account|from savings|to savings)\b", re.IGNORECASE)
+# "internal" is a reference people use for moving their own money between banks.
+_TRANSFER_WORDS = re.compile(r"\b(transfer|trf|tfr|own account|internal|from savings|to savings)\b", re.IGNORECASE)
 AUTO_PREFIX = "tr_"
 # Stored when you say a transaction is not a transfer, so it's never paired again.
 NOT_A_TRANSFER = "user:not"

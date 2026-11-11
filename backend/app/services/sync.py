@@ -14,7 +14,7 @@ from ..models import Account, CategoryRule, Connection, SyncLog, Transaction
 from ..providers import ProviderError, RawAccount, RawTransaction, starling, trading212, truelayer
 from . import income
 from .categorise import categorise, display_merchant, normalise_merchant
-from .transfers import detect_transfers
+from .transfers import NOT_A_TRANSFER, detect_transfers
 
 DEFAULT_LOOKBACK_DAYS = 730
 # Re-pull a few days behind the newest row: banks tweak pending rows after the fact.
@@ -435,6 +435,7 @@ def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, s
         payment_type=txn.payment_type,
         rules=rules,
         merchant_key=txn.merchant_key,
+        not_a_transfer=txn.transfer_group == NOT_A_TRANSFER,
     )
 
 

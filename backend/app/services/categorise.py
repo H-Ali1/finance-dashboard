@@ -786,6 +786,9 @@ _INCOME_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
 _REFUND_WORDS: tuple[str, ...] = ("refund", "reimbursement", "reversal", "chargeback")
 
 
+_INTERNAL = re.compile(r"(?<![a-z0-9])internal(?![a-z0-9])", re.IGNORECASE)
+
+
 def _words(text: str) -> str:
     """Lower case, punctuation as spaces: the form keywords are written in."""
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
@@ -930,6 +933,7 @@ def categorise(
     payment_type: str | None = None,
     rules: list | None = None,
     merchant_key: str | None = None,
+    not_a_transfer: bool = False,
 ) -> tuple[str, str]:
     """Returns (category, source). Pass the stored `merchant_key` for a saved
     transaction, so rules see the key they were made from.
@@ -955,6 +959,14 @@ def categorise(
 
     if by_type := _payment_type_category(payment_type, amount_minor):
         return by_type, "auto"
+
+    # "internal" is a reference for moving your own money between banks: never
+    # income or spending, even when the other bank isn't connected. Not for a
+    # card purchase or direct debit (those go to businesses), nor once you've
+    # said it isn't a transfer.
+    own_money_types = (None, "transfer", "standing_order")
+    if payment_type in own_money_types and not not_a_transfer and _INTERNAL.search(f"{description} {merchant}"):
+        return "Transfers", "auto"
 
     # The bank's own wording first: "UBER *EATS" says more than the "uber" key.
     words = _words(f"{description_key} {merchant_key}")
