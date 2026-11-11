@@ -71,13 +71,16 @@ The full setup guide, including connecting banks through TrueLayer, is in
 
 ### Docker Compose
 
+Copy `backend/.env.example` to `backend/.env` and add your keys first: the
+container reads them when it starts. Then:
+
 ```bash
 docker compose up -d --build
 ```
 
-Then open http://127.0.0.1:8099. Keys go in `backend/.env` (copy
-`backend/.env.example`). It only listens on localhost, because the app has no
-login of its own.
+Open http://127.0.0.1:8099. It only listens on localhost, because the app has
+no login of its own. After changing `backend/.env`, run
+`docker compose up -d --force-recreate` to start again with the new keys.
 
 ## Connected accounts
 
@@ -91,7 +94,7 @@ login of its own.
 ## Architecture
 
 ```mermaid
-%%{init: {'layout': 'dagre', 'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
+%%{init: {'layout': 'dagre', 'flowchart': {'diagramPadding': 8, 'nodeSpacing': 30, 'rankSpacing': 30, 'padding': 8}, 'theme': 'base', 'themeVariables': {'fontSize': '13px', 'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
 flowchart TB
     user["User"] <--> tunnel["Cloudflare Tunnel"] <--> ha
 
@@ -188,8 +191,8 @@ Then open http://localhost:5173. On macOS and Linux the paths are `.venv/bin/`
 instead of `.venv/Scripts/`.
 
 Changes go in through pull requests: tests, lint, a secret scan and a
-CodeRabbit review must pass before one merges, and merging to `main` releases
-it to Home Assistant. See [CONTRIBUTING.md](CONTRIBUTING.md).
+CodeRabbit review must pass before one merges. Merging a change to the app
+into `main` releases it to Home Assistant; documentation-only changes don't. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Project layout
 
