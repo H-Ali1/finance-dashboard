@@ -14,7 +14,7 @@ in the Home Assistant sidebar.**
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FH-Ali1%2Ffinance-dashboard%23ha-release)
 
-[Features](#features) · [Installation](#installation) · [Connected accounts](#connected-accounts) · [Architecture](#architecture) · [Security](#security) · [Development](#development)
+[Features](#features) · [Installation](#installation) · [Connected accounts](#connected-accounts) · [Architecture](#architecture) · [Security](#security) · [FAQ](#faq) · [Development](#development)
 
 </div>
 
@@ -26,16 +26,44 @@ insight into spending, budgeting and investments. It's self-hosted at home on
 a Home Assistant Green, a small Raspberry Pi, and installs like any other Home
 Assistant App.
 
+<p align="center">
+  <img src="docs/images/overview.png" alt="The Overview tab: net worth, this month's projection, spending so far and cash runway" width="900">
+</p>
+
 ## Features
 
-- **Spending:** where the money goes, by category and merchant, month by month.
-- **Budgets:** monthly limits per category, and how this month is tracking.
-- **Subscriptions and bills:** found automatically, with price rises,
-  duplicates and stopped payments flagged.
-- **Cash flow:** money in against money out, and a projection for the month.
-- **Investments and net worth:** Trading 212 holdings, the pension and other
-  assets, and a daily net-worth history.
-- **Needs fixing:** plain-English findings, each with a pound figure attached.
+- ✅ **Spending:** where the money goes, by category and merchant, month by month
+- ✅ **Budgets:** monthly limits per category, and how this month is tracking
+- ✅ **Subscriptions and bills:** found automatically, with price rises,
+  duplicates and stopped payments flagged
+- ✅ **Cash flow:** money in against money out, and a projection for the month
+- ✅ **Investments and net worth:** Trading 212 holdings, the pension and other
+  assets, and a daily net-worth history
+- ✅ **Needs fixing:** plain-English findings, each with a pound figure attached
+- ✅ **Read-only everywhere:** no connection can move money
+- ✅ **Your data stays at home,** in a database on your own Home Assistant
+- ✅ **Behind Home Assistant's login,** with its multi-factor authentication
+- ✅ **Daily backups** kept for a week, and statement import for banks without
+  an API
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/spending.png" alt="The Spending tab: this month by category and by account"></td>
+    <td width="50%"><img src="docs/images/subscriptions.png" alt="The Subscriptions tab: a price rise, a duplicate subscription and what's due next"></td>
+  </tr>
+  <tr>
+    <td align="center">Spending by category and account</td>
+    <td align="center">Subscriptions, price rises and duplicates</td>
+  </tr>
+</table>
+
+On a phone, the cards stack into one column:
+
+<p align="center">
+  <img src="docs/images/mobile.png" alt="The Overview tab on a phone" width="300">
+</p>
+
+<sub>Screenshots use made-up demo data.</sub>
 
 ## Installation
 
@@ -167,6 +195,36 @@ drawn as charts in the browser.
       protected with two-factor authentication.
     - HSBC and Amex data passes through TrueLayer on its way to the dashboard.
 
+## FAQ
+
+**Is my data sent anywhere?** It's stored in the App's database on your Home
+Assistant, with a daily copy of it kept there for a week. Home Assistant's own
+backups include the database too, so it also goes wherever you store those
+backups: keep backup encryption on. The app talks to Starling, Trading 212 and
+TrueLayer to fetch your accounts, and to nothing else: there's no analytics or
+tracking. HSBC and Amex data passes through TrueLayer on its way to you.
+
+**Why do HSBC and Amex need connecting again every 90 days?** Open banking
+access lasts 90 days. **Needs fixing** warns you in the last 10 days: press
+**Connect again** on the **Connections** tab and approve it at your bank.
+
+**Can I add Chase or another bank?** If TrueLayer supports your bank, connect
+it on the **Connections** tab. Otherwise, import its statements as CSV files
+with a date, a description and an amount. Chase UK isn't on TrueLayer and only
+gives PDF statements, so convert those to CSV first. Rows you've already
+imported are skipped, so importing a statement again, or one that overlaps
+another, is safe. The one catch: identical transactions on the same day (same
+amount and description) are told apart by their order in the file, so import
+statements that cover whole days.
+
+**What if TrueLayer stops letting me connect?** TrueLayer only signs contracts
+with businesses, and personal use of a Live app isn't supported, so it could
+stop at any time. Starling, Trading 212 and CSV import don't depend on it.
+
+**Can it move money or make payments?** No. Every connection is read-only:
+the Starling token, the Trading 212 key and the TrueLayer access can read
+balances and transactions, nothing more.
+
 ## Development
 
 Run it locally with demo data:
@@ -217,3 +275,10 @@ Released under the [MIT License](LICENSE).
 
 Finance Dashboard isn't affiliated with Home Assistant, Starling, Trading 212,
 TrueLayer or any bank, and nothing it shows is financial advice.
+
+## Support
+
+If Finance Dashboard helps you keep on top of your money, you can buy me a
+coffee. Thank you! ☕
+
+<a href="https://buymeacoffee.com/hali1"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="50"></a>
