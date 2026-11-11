@@ -962,8 +962,10 @@ def categorise(
 
     # "internal" is a reference for moving your own money between banks: never
     # income or spending, even when the other bank isn't connected. Not for a
-    # card purchase (a shop's name), nor once you've said it isn't a transfer.
-    if payment_type != "card" and not not_a_transfer and _INTERNAL.search(f"{description} {merchant}"):
+    # card purchase or direct debit (those go to businesses), nor once you've
+    # said it isn't a transfer.
+    own_money_types = (None, "transfer", "standing_order")
+    if payment_type in own_money_types and not not_a_transfer and _INTERNAL.search(f"{description} {merchant}"):
         return "Transfers", "auto"
 
     # The bank's own wording first: "UBER *EATS" says more than the "uber" key.

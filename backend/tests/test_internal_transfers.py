@@ -76,6 +76,10 @@ def test_internal_comes_before_other_words_but_not_for_card_purchases():
     assert categorise(merchant="SALARY INTERNAL", description="", amount_minor=5000)[0] == "Transfers"
     card = categorise(merchant="INTERNAL MEDICINE CLINIC", description="", amount_minor=-6000, payment_type="card")
     assert card[0] == "Health & Fitness"
+    debit = categorise(
+        merchant="INTERNAL MEDICINE CLINIC", description="", amount_minor=-6000, payment_type="direct_debit"
+    )
+    assert debit[0] == "Health & Fitness"
 
 
 def test_not_a_transfer_sticks_for_internal(fresh_db):
