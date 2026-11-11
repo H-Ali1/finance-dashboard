@@ -1,11 +1,32 @@
+<div align="center">
+
 # Finance Dashboard
 
-A vibe-coded personal finance dashboard, built to replace Emma and Snoop. It
-brings my bank accounts, credit cards and investments together in one place,
-for insight into spending, budgeting and investments. It's self-hosted at home
-on a Home Assistant Green, a small Raspberry Pi.
+**Spending, budgets, subscriptions and net worth across your own accounts,
+in the Home Assistant sidebar.**
 
-## What it does
+[![Release](https://img.shields.io/github/v/tag/H-Ali1/finance-dashboard?sort=semver&label=release)](https://github.com/H-Ali1/finance-dashboard/tags)
+[![CI](https://github.com/H-Ali1/finance-dashboard/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/H-Ali1/finance-dashboard/actions/workflows/ci.yml)
+[![Home Assistant App](https://img.shields.io/badge/Home%20Assistant-App-41BDF5?logo=homeassistant&logoColor=white)](homeassistant/DOCS.md)
+[![Platforms](https://img.shields.io/badge/platforms-aarch64%20%7C%20amd64-555)](#requirements)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-555)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/hali1)
+
+[![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FH-Ali1%2Ffinance-dashboard%23ha-release)
+
+[Features](#features) · [Installation](#installation) · [Connected accounts](#connected-accounts) · [Architecture](#architecture) · [Security](#security) · [Development](#development)
+
+</div>
+
+---
+
+A vibe-coded personal finance dashboard, built to replace Emma and Snoop. It
+brings bank accounts, credit cards and investments together in one place, for
+insight into spending, budgeting and investments. It's self-hosted at home on
+a Home Assistant Green, a small Raspberry Pi, and installs like any other Home
+Assistant App.
+
+## Features
 
 - **Spending:** where the money goes, by category and merchant, month by month.
 - **Budgets:** monthly limits per category, and how this month is tracking.
@@ -16,10 +37,64 @@ on a Home Assistant Green, a small Raspberry Pi.
   assets, and a daily net-worth history.
 - **Needs fixing:** plain-English findings, each with a pound figure attached.
 
+## Installation
+
+### Requirements
+
+- Home Assistant OS or Home Assistant Supervised. Apps need the Supervisor,
+  so Home Assistant Container and Core installs can use
+  [Docker Compose](#docker-compose) instead.
+- A 64-bit ARM (`aarch64`) or Intel/AMD (`amd64`) machine. Images are prebuilt
+  for both.
+
+### Home Assistant
+
+1. Press **Add repository to my Home Assistant** above, or add this under
+   **Settings → Apps → App store → ⋮ → Repositories**:
+
+   ```
+   https://github.com/H-Ali1/finance-dashboard#ha-release
+   ```
+
+2. Open **Finance Dashboard** in the App store and press **Install**.
+3. Add your keys on the **Configuration** tab. On the **Info** tab, turn on
+   **Start on boot**, **Watchdog**, **Auto update** and **Show in sidebar**,
+   then press **Start**.
+
+The full setup guide, including connecting banks through TrueLayer, is in
+[homeassistant/DOCS.md](homeassistant/DOCS.md).
+
+> [!NOTE]
+> Finance Dashboard isn't in HACS. HACS distributes integrations, dashboard
+> cards and themes, not Apps. The repository button above is the one-click
+> equivalent.
+
+### Docker Compose
+
+Copy `backend/.env.example` to `backend/.env` and add your keys first: the
+container reads them when it starts. Then:
+
+```bash
+docker compose up -d --build
+```
+
+Open http://127.0.0.1:8099. It only listens on localhost, because the app has
+no login of its own. After changing `backend/.env`, run
+`docker compose up -d --force-recreate` to start again with the new keys.
+
+## Connected accounts
+
+| Account | How |
+|---|---|
+| Starling | Starling's API, with a read-only personal access token |
+| Trading 212 | Trading 212's API, with a read-only key |
+| HSBC, Amex and other UK banks | TrueLayer (open banking) |
+| Anything else | CSV statement import |
+
 ## Architecture
 
 ```mermaid
-%%{init: {'layout': 'dagre', 'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
+%%{init: {'layout': 'dagre', 'flowchart': {'diagramPadding': 8, 'nodeSpacing': 30, 'rankSpacing': 30, 'padding': 8}, 'theme': 'base', 'themeVariables': {'fontSize': '13px', 'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
 flowchart TB
     user["User"] <--> tunnel["Cloudflare Tunnel"] <--> ha
 
@@ -52,6 +127,24 @@ process does all the work:
 | Database | SQLite in the `/data` volume | Accounts, transactions, budgets, history |
 | Background jobs | A thread in the same process | Syncs every few hours, backs up daily |
 
+### How data flows
+
+**Syncing** runs on a schedule (every 6 hours), from the Sync button, or when a
+bank is connected. Only one sync runs at a time.
+
+1. Fetch accounts, balances and transactions from each provider.
+2. Store them in one format: amounts in pence, money out negative. Rows
+   already stored are updated rather than added twice.
+3. Categorise each transaction: your own rules first, then keywords, the
+   card's merchant code, then the bank's own category.
+4. Pair transfers between your own accounts, so paying off a credit card isn't
+   counted as spending and income.
+5. Record the day's net worth.
+
+**Viewing:** each tab asks the API for what it shows. Nothing is calculated in
+advance: the figures are worked out from the database on every request, then
+drawn as charts in the browser.
+
 ## Security
 
 - **Remote access through a Cloudflare Tunnel.** The Cloudflared add-on opens
@@ -74,49 +167,9 @@ process does all the work:
       protected with two-factor authentication.
     - HSBC and Amex data passes through TrueLayer on its way to the dashboard.
 
-## Connected accounts
+## Development
 
-| Account | How |
-|---|---|
-| Starling | Starling's API, with a read-only personal access token |
-| Trading 212 | Trading 212's API, with a read-only key |
-| HSBC, Amex and other UK banks | TrueLayer (open banking) |
-| Anything else | CSV statement import |
-
-## How data flows
-
-**Syncing** runs on a schedule (every 6 hours), from the Sync button, or when a
-bank is connected. Only one sync runs at a time.
-
-1. Fetch accounts, balances and transactions from each provider.
-2. Store them in one format: amounts in pence, money out negative. Rows
-   already stored are updated rather than added twice.
-3. Categorise each transaction: your own rules first, then keywords, the
-   card's merchant code, then the bank's own category.
-4. Pair transfers between your own accounts, so paying off a credit card isn't
-   counted as spending and income.
-5. Record the day's net worth.
-
-**Viewing:** each tab asks the API for what it shows. Nothing is calculated in
-advance: the figures are worked out from the database on every request, then
-drawn as charts in the browser.
-
-## Running it
-
-Home Assistant install steps are in
-[homeassistant/DOCS.md](homeassistant/DOCS.md).
-
-**Docker Compose**
-
-```bash
-docker compose up -d --build
-```
-
-Then open http://127.0.0.1:8099. Keys go in `backend/.env` (copy
-`backend/.env.example`). It only listens on localhost, because the app has no
-login of its own.
-
-**Local development**, with demo data:
+Run it locally with demo data:
 
 ```bash
 cd backend && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
@@ -137,7 +190,11 @@ cd frontend && npm install && npm run dev
 Then open http://localhost:5173. On macOS and Linux the paths are `.venv/bin/`
 instead of `.venv/Scripts/`.
 
-## Project layout
+Changes go in through pull requests: tests, lint, a secret scan and a
+CodeRabbit review must pass before one merges. Merging a change to the app
+into `main` releases it to Home Assistant; documentation-only changes don't. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Project layout
 
 ```
 backend/
@@ -151,3 +208,12 @@ frontend/src/     the React app
 homeassistant/    the Home Assistant App definition and its docs
 Dockerfile        one image for Home Assistant, Docker and Kubernetes
 ```
+
+## Licence
+
+Released under the [MIT License](LICENSE).
+
+## Disclaimer
+
+Finance Dashboard isn't affiliated with Home Assistant, Starling, Trading 212,
+TrueLayer or any bank, and nothing it shows is financial advice.
