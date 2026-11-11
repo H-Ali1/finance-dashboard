@@ -4,7 +4,7 @@
 # patch number automatically; raise `version` here only for a bigger jump
 # (1.2.0, 2.0.0).
 name: Finance Dashboard
-version: "1.1.7"
+version: "1.1.8"
 slug: finance_dashboard
 description: Spending, budgets, subscriptions and net worth across your own accounts.
 url: https://github.com/H-Ali1/finance-dashboard

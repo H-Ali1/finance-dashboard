@@ -3,6 +3,10 @@
 Home Assistant shows this when an update is available. Releases are added
 automatically by the CI workflow.
 
+## 1.1.8
+
+- Recognise transfers between your own banks marked internal (#14)
+
 ## 1.1.7
 
 - Sync only new data; never store or count the same transaction twice (#12)
