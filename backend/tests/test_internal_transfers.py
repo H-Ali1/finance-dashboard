@@ -67,3 +67,25 @@ def test_a_category_set_by_hand_is_kept(fresh_db):
     sync_service.recategorise_all(fresh_db)
     fresh_db.refresh(row)
     assert row.category == "Income"
+
+
+def test_internal_comes_before_other_words_but_not_for_card_purchases():
+    from app.services.categorise import categorise
+
+    assert categorise(merchant="RENT INTERNAL", description="RENT INTERNAL", amount_minor=-5000)[0] == "Transfers"
+    assert categorise(merchant="SALARY INTERNAL", description="", amount_minor=5000)[0] == "Transfers"
+    card = categorise(merchant="INTERNAL MEDICINE CLINIC", description="", amount_minor=-6000, payment_type="card")
+    assert card[0] == "Health & Fitness"
+
+
+def test_not_a_transfer_sticks_for_internal(fresh_db):
+    from app.services.transfers import NOT_A_TRANSFER
+
+    _, receiver = _accounts(fresh_db)
+    sync_service.upsert_transactions(fresh_db, receiver, [_raw("in", 3, 30000, "From DOE S - internal")])
+    row = fresh_db.scalar(select(Transaction))
+    row.transfer_group = NOT_A_TRANSFER  # what "not a transfer" stores
+    fresh_db.commit()
+    sync_service.recategorise_all(fresh_db)
+    fresh_db.refresh(row)
+    assert row.category == "Income"
