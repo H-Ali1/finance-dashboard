@@ -728,6 +728,9 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
             "transfer",
             "trf",
             "own account",
+            # A reference for moving your own money: never income or spending,
+            # even when the other bank isn't connected.
+            "internal",
             "savings goal",
             "space transfer",
             "monzo pot",
