@@ -16,6 +16,30 @@ on a Home Assistant Green, a small Raspberry Pi.
   assets, and a daily net-worth history.
 - **Needs fixing:** plain-English findings, each with a pound figure attached.
 
+## Architecture
+
+```mermaid
+%%{init: {'layout': 'dagre', 'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#1f2328', 'primaryBorderColor': '#6e7781', 'lineColor': '#8c959f', 'titleColor': '#57606a', 'clusterBkg': '#ffffff', 'clusterBorder': '#8c959f', 'fontFamily': 'sans-serif'}}}%%
+flowchart TB
+    user["User"] <--> tunnel["Cloudflare Tunnel"] <--> ha
+
+    %% #nbsp; padding moves this title left, clear of the arrow. The one after
+    %% "(read-only)" stops GitHub's wider font clipping the bracket.
+    subgraph green["Home Assistant Green#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;#nbsp;"]
+        ha["Home Assistant<br/>login + MFA"] <--> container
+        subgraph container["Docker container"]
+            direction LR
+            frontend["Front End"] <--> backend["Backend"] <--> db[("SQLite")]
+        end
+    end
+
+    container <--> apis
+
+    subgraph apis["Bank APIs (read-only)#nbsp;"]
+        direction LR
+        truelayer["TrueLayer<br/>HSBC, Amex"] ~~~ starling["Starling API"] ~~~ t212["Trading 212 API"]
+    end
+```
 
 Home Assistant OS runs everything as Docker containers, and the dashboard is
 one of them, installed as a Home Assistant App. Inside it, a single Python
