@@ -197,10 +197,12 @@ drawn as charts in the browser.
 
 ## FAQ
 
-**Is my data sent anywhere?** It's stored only in the App's database on your
-Home Assistant. The app talks to Starling, Trading 212 and TrueLayer to fetch
-your accounts, and to nothing else: there's no analytics or tracking. HSBC and
-Amex data passes through TrueLayer on its way to you.
+**Is my data sent anywhere?** It's stored in the App's database on your Home
+Assistant, with a daily copy of it kept there for a week. Home Assistant's own
+backups include the database too, so it also goes wherever you store those
+backups: keep backup encryption on. The app talks to Starling, Trading 212 and
+TrueLayer to fetch your accounts, and to nothing else: there's no analytics or
+tracking. HSBC and Amex data passes through TrueLayer on its way to you.
 
 **Why do HSBC and Amex need connecting again every 90 days?** Open banking
 access lasts 90 days. **Needs fixing** warns you in the last 10 days: press
@@ -209,8 +211,11 @@ access lasts 90 days. **Needs fixing** warns you in the last 10 days: press
 **Can I add Chase or another bank?** If TrueLayer supports your bank, connect
 it on the **Connections** tab. Otherwise, import its statements as CSV files
 with a date, a description and an amount. Chase UK isn't on TrueLayer and only
-gives PDF statements, so convert those to CSV first. Importing an overlapping
-file again is safe: duplicates are skipped.
+gives PDF statements, so convert those to CSV first. Rows you've already
+imported are skipped, so importing a statement again, or one that overlaps
+another, is safe. The one catch: identical transactions on the same day (same
+amount and description) are told apart by their order in the file, so import
+statements that cover whole days.
 
 **What if TrueLayer stops letting me connect?** TrueLayer only signs contracts
 with businesses, and personal use of a Live app isn't supported, so it could
