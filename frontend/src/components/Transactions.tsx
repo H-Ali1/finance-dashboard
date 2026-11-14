@@ -3,7 +3,16 @@ import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { categoryColor, dateLabel, money } from "../lib/format";
 import type { Account, Transaction } from "../types";
+import RuleEditor from "./RuleEditor";
 import { Card, Empty, ErrorBanner, Loading } from "./ui";
+
+/** Who set a transaction's category, as the filter and the tooltip say it. */
+const SOURCES: { value: string; label: string }[] = [
+  { value: "auto", label: "Automatic" },
+  { value: "rule", label: "A rule" },
+  { value: "manual", label: "You" },
+  { value: "learned", label: "Learned from your choices" },
+];
 
 interface Page {
   total: number;
@@ -20,6 +29,7 @@ export default function Transactions() {
   const [accountId, setAccountId] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const [source, setSource] = useState("");
   const [includeTransfers, setIncludeTransfers] = useState(false);
   const [offset, setOffset] = useState(0);
   const [version, setVersion] = useState(0);
@@ -27,6 +37,7 @@ export default function Transactions() {
   // After one transaction is re-filed: offer the same for the whole merchant.
   const [offer, setOffer] = useState<{ merchant: string; merchant_key: string; category: string } | null>(null);
   const [offerResult, setOfferResult] = useState<string | null>(null);
+  const [ruleResult, setRuleResult] = useState<string | null>(null);
 
   const params = new URLSearchParams({
     limit: String(PAGE_SIZE),
@@ -38,6 +49,7 @@ export default function Transactions() {
   if (accountId) params.set("account_id", accountId);
   if (start) params.set("start", start);
   if (end) params.set("end", end);
+  if (source) params.set("source", source);
 
   const page = useApi<Page>(`/api/transactions?${params.toString()}`, [
     search,
@@ -45,6 +57,7 @@ export default function Transactions() {
     accountId,
     start,
     end,
+    source,
     includeTransfers,
     offset,
     version,
@@ -117,6 +130,21 @@ export default function Transactions() {
               </option>
             ))}
           </select>
+          <select
+            value={source}
+            onChange={(event) => {
+              setOffset(0);
+              setSource(event.target.value);
+            }}
+            aria-label="Category set by"
+          >
+            <option value="">Category set by anyone</option>
+            {SOURCES.map((item) => (
+              <option key={item.value} value={item.value}>
+                Set by: {item.label.toLowerCase()}
+              </option>
+            ))}
+          </select>
           <input type="date" value={start} onChange={(event) => setStart(event.target.value)} title="From" />
           <input type="date" value={end} onChange={(event) => setEnd(event.target.value)} title="To" />
           <label className="row tiny secondary" style={{ gap: 6 }}>
@@ -135,6 +163,7 @@ export default function Transactions() {
               setAccountId("");
               setStart("");
               setEnd("");
+              setSource("");
               setOffset(0);
             }}
           >
@@ -171,13 +200,32 @@ export default function Transactions() {
         </div>
       )}
 
+      {ruleResult && (
+        <div className="banner row-between" role="status">
+          <span>{ruleResult}</span>
+          <button className="btn btn-ghost" onClick={() => setRuleResult(null)} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+
       {ruleFor && (
-        <RuleForm
-          transaction={ruleFor}
+        <RuleEditor
+          key={ruleFor.id}
+          rule={{
+            pattern: ruleFor.merchant_key,
+            match_type: "words",
+            field: "merchant",
+            category: ruleFor.category === "Uncategorised" ? null : ruleFor.category,
+          }}
           categories={categories.data?.categories ?? []}
+          accounts={accounts.data?.accounts ?? []}
           onClose={() => setRuleFor(null)}
-          onSaved={() => {
-            setRuleFor(null);
+          onSaved={(message) => {
+            // Only this editor closes: another may have opened while it saved.
+            const owner = ruleFor;
+            setRuleFor((current) => (current === owner ? null : current));
+            setRuleResult(message);
             refresh();
           }}
         />
@@ -226,7 +274,15 @@ export default function Transactions() {
                     <td className="nowrap secondary">{dateLabel(txn.date, true)}</td>
                     <td>
                       <span className="swatch" style={{ background: categoryColor(txn.category) }} />
-                      {txn.merchant}
+                      <span title={txn.bank_merchant ? `Your bank calls it ${txn.bank_merchant}` : undefined}>
+                        {txn.merchant}
+                      </span>
+                      {txn.category_source === "learned" && (
+                        <span className="badge" style={{ marginLeft: 8 }} title="Filed like similar merchants you've categorised">
+                          Learned
+                        </span>
+                      )}
+                      {txn.excluded && <span className="badge" style={{ marginLeft: 8 }}>Not counted</span>}
                       {txn.is_transfer && <span className="badge" style={{ marginLeft: 8 }}>Transfer</span>}
                       {txn.status === "pending" && (
                         <span className="badge" style={{ marginLeft: 8 }}>Pending</span>
@@ -241,7 +297,7 @@ export default function Transactions() {
                         value={txn.category}
                         onChange={(event) => setCategoryFor(txn, event.target.value)}
                         style={txn.category_source === "manual" ? { borderColor: "var(--series-1)" } : undefined}
-                        title={`Set by: ${txn.category_source}`}
+                        title={`Set by: ${(SOURCES.find((item) => item.value === txn.category_source)?.label ?? txn.category_source).toLowerCase()}`}
                       >
                         {(categories.data?.categories ?? [txn.category]).map((name) => (
                           <option key={name} value={name}>
@@ -252,7 +308,7 @@ export default function Transactions() {
                     </td>
                     <td className={`num ${txn.amount >= 0 ? "delta-up" : ""}`}>{money(txn.amount)}</td>
                     <td className="num">
-                      <button className="btn btn-ghost" title="Always categorise this merchant this way" onClick={() => setRuleFor(txn)}>
+                      <button className="btn btn-ghost" title="Make a rule from this transaction" onClick={() => setRuleFor(txn)}>
                         Rule
                       </button>
                     </td>
@@ -264,68 +320,5 @@ export default function Transactions() {
         )}
       </Card>
     </div>
-  );
-}
-
-function RuleForm({
-  transaction,
-  categories,
-  onClose,
-  onSaved,
-}: {
-  transaction: Transaction;
-  categories: string[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [pattern, setPattern] = useState(transaction.merchant.toLowerCase());
-  const [category, setCategory] = useState(transaction.category);
-  const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-
-  const save = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setSaving(true);
-    try {
-      const response = await api.post<{ recategorised: number }>("/api/rules", {
-        pattern,
-        category,
-        match_type: "words",
-        field: "merchant",
-        apply_now: true,
-      });
-      setResult(`Rule saved — ${response.recategorised} transactions recategorised.`);
-      setTimeout(onSaved, 900);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Card title="New categorisation rule" hint="Applies to every past and future transaction that matches">
-      <form className="row" onSubmit={save}>
-        <input
-          value={pattern}
-          onChange={(event) => setPattern(event.target.value)}
-          style={{ minWidth: 240 }}
-          placeholder="Merchant name has the words…"
-        />
-        <span className="muted">→</span>
-        <select value={category} onChange={(event) => setCategory(event.target.value)}>
-          {categories.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <button className="btn btn-primary" disabled={saving || !pattern}>
-          {saving ? "Saving…" : "Save rule"}
-        </button>
-        <button type="button" className="btn" onClick={onClose}>
-          Cancel
-        </button>
-        {result && <span className="secondary">{result}</span>}
-      </form>
-    </Card>
   );
 }

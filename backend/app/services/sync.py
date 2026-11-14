@@ -12,8 +12,18 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Account, CategoryRule, Connection, SyncLog, Transaction
 from ..providers import ProviderError, RawAccount, RawTransaction, starling, trading212, truelayer
-from . import income
-from .categorise import categorise, display_merchant, normalise_merchant
+from . import income, learn
+from .categorise import (
+    CompiledRule,
+    RuleOutcome,
+    categorise,
+    compile_rules,
+    display_merchant,
+    evaluate_rules,
+    normalise_merchant,
+    rule_key,
+    rule_order,
+)
 from .transfers import NOT_A_TRANSFER, detect_transfers
 
 DEFAULT_LOOKBACK_DAYS = 730
@@ -33,16 +43,56 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
-def _rules(db: Session) -> list[CategoryRule]:
-    """Most specific first: the longer pattern ("amazon prime" before
-    "amazon"), then priority, then the one saved most recently."""
-    return list(
-        db.scalars(
-            select(CategoryRule).order_by(
-                func.length(CategoryRule.pattern).desc(), CategoryRule.priority, CategoryRule.id.desc()
-            )
-        )
+def rules_in_order(db: Session) -> list[CategoryRule]:
+    """Your rules in the order they're checked, most specific first: see
+    categorise.rule_order."""
+    return sorted(db.scalars(select(CategoryRule)), key=rule_order)
+
+
+def _rules(db: Session) -> list[CompiledRule]:
+    """Your rules, in order and ready to check many transactions against."""
+    return compile_rules(db.scalars(select(CategoryRule)))
+
+
+def bank_key(txn: Transaction) -> str:
+    """The merchant key the bank's name gives, whatever it's called now."""
+    if txn.merchant_source and txn.bank_merchant_key is not None:
+        return txn.bank_merchant_key
+    return txn.merchant_key or (txn.merchant or txn.description or "").strip().lower()
+
+
+def rule_outcome(txn: Transaction, rules: list[CompiledRule]) -> RuleOutcome:
+    return evaluate_rules(
+        rules,
+        bank_key=bank_key(txn),
+        description=txn.description,
+        amount_minor=txn.amount_minor,
+        account_id=txn.account_id,
+        payment_type=txn.payment_type,
+        own_key=txn.merchant_key if txn.merchant_source == "manual" else None,
+        can_rename=txn.merchant_source != "manual",
     )
+
+
+def apply_rule_actions(txn: Transaction, outcome: RuleOutcome) -> None:
+    """Rename and exclude as the rules say. Your own name for a merchant, and
+    your own say on whether a payment counts, are never changed."""
+    if txn.merchant_source != "manual":
+        if outcome.rename:
+            if txn.merchant_source != "rule":  # first rename: keep the bank's name
+                txn.bank_merchant, txn.bank_merchant_key = txn.merchant, txn.merchant_key
+            txn.merchant, txn.merchant_key = outcome.rename, rule_key(outcome.rename)
+            txn.merchant_source = "rule"
+        elif txn.merchant_source == "rule":  # the rule's gone: back to the bank's name
+            txn.merchant = txn.bank_merchant or txn.merchant
+            txn.merchant_key = txn.bank_merchant_key if txn.bank_merchant_key is not None else txn.merchant_key
+            txn.bank_merchant = txn.bank_merchant_key = txn.merchant_source = None
+
+    if txn.excluded_source != "manual":
+        if outcome.exclude:
+            txn.excluded, txn.excluded_source = True, "rule"
+        elif txn.excluded_source == "rule":
+            txn.excluded, txn.excluded_source = False, None
 
 
 def upsert_account(db: Session, provider: str, raw: RawAccount, connection: Connection | None) -> Account:
@@ -140,16 +190,6 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
                 txn.category, txn.category_source = _categorise_row(txn, rules)
             continue
 
-        category, source = categorise(
-            merchant=raw.merchant,
-            description=raw.description,
-            amount_minor=raw.amount_minor,
-            mcc=raw.mcc,
-            provider_category=raw.provider_category,
-            payment_type=raw.payment_type,
-            rules=rules,
-            merchant_key=merchant_key,
-        )
         txn = Transaction(
             account_id=account.id,
             external_id=raw.external_id,
@@ -160,12 +200,23 @@ def upsert_transactions(db: Session, account: Account, raws: list[RawTransaction
             description=raw.description,
             merchant=display_merchant(raw.merchant or raw.description),
             merchant_key=merchant_key,
-            category=category,
-            category_source=source,
             provider_category=raw.provider_category,
             mcc=raw.mcc,
             status=raw.status,
             payment_type=raw.payment_type,
+            excluded=False,
+        )
+        outcome = rule_outcome(txn, rules)
+        apply_rule_actions(txn, outcome)
+        txn.category, txn.category_source = categorise(
+            merchant=raw.merchant,
+            description=raw.description,
+            amount_minor=raw.amount_minor,
+            mcc=raw.mcc,
+            provider_category=raw.provider_category,
+            payment_type=raw.payment_type,
+            merchant_key=txn.merchant_key,
+            outcome=outcome,
         )
         db.add(txn)
         existing[raw.external_id] = txn  # the same row twice in one batch is one row
@@ -425,7 +476,7 @@ def sync_all(db: Session, *, unattended: bool = False, psu_ip: str | None = None
     }
 
 
-def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, str]:
+def _categorise_row(txn: Transaction, rules: list[CompiledRule], outcome: RuleOutcome | None = None) -> tuple[str, str]:
     return categorise(
         merchant=txn.merchant,
         description=txn.description,
@@ -433,9 +484,9 @@ def _categorise_row(txn: Transaction, rules: list[CategoryRule]) -> tuple[str, s
         mcc=txn.mcc,
         provider_category=txn.provider_category,
         payment_type=txn.payment_type,
-        rules=rules,
         merchant_key=txn.merchant_key,
         not_a_transfer=txn.transfer_group == NOT_A_TRANSFER,
+        outcome=outcome if outcome is not None else rule_outcome(txn, rules),
     )
 
 
@@ -445,24 +496,38 @@ def categorise_one(db: Session, txn: Transaction) -> str:
 
 
 def recategorise_all(db: Session, *, include_manual: bool = False) -> int:
-    """Re-run categorisation, e.g. after adding a rule. Money in then gets a
-    second look with the whole history in view (salary, tutoring, you)."""
+    """Re-run your rules and categorisation, e.g. after adding a rule. Money
+    in then gets a second look with the whole history in view (salary,
+    tutoring, you), and money out nothing could place is filed from what
+    you've categorised before, where that's clear.
+
+    Returns how many transactions now look different: a new category, a new
+    name, or counted where they weren't (or the other way round)."""
     rules = _rules(db)
     rows = list(db.scalars(select(Transaction)))
-    proposals = {
-        txn.id: _categorise_row(txn, rules)
-        for txn in rows
-        if not txn.is_transfer and (include_manual or txn.category_source != "manual")
-    }
+    proposals = {}
+    renamed_or_excluded: set[int] = set()
+    for txn in rows:
+        if txn.is_transfer:
+            continue
+        before = (txn.merchant, txn.excluded)
+        outcome = rule_outcome(txn, rules)
+        apply_rule_actions(txn, outcome)
+        if (txn.merchant, txn.excluded) != before:
+            renamed_or_excluded.add(txn.id)
+        if include_manual or txn.category_source != "manual":
+            proposals[txn.id] = _categorise_row(txn, rules, outcome)
     income.refine(rows, proposals, {a.id: a for a in db.scalars(select(Account))})
+    learn.fill(rows, proposals)
 
-    changed = 0
+    changed = set(renamed_or_excluded)
     for txn in rows:
         if txn.id not in proposals:
             continue
         category, source = proposals[txn.id]
         if (category, source) != (txn.category, txn.category_source):
-            changed += category != txn.category
+            if category != txn.category:
+                changed.add(txn.id)
             txn.category, txn.category_source = category, source
     db.commit()
-    return changed
+    return len(changed)

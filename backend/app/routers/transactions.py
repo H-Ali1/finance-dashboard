@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, or_, select
@@ -10,12 +12,28 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Account, Budget, CategoryRule, Transaction
+from ..models import Account, Budget, CategoryRule, Transaction, rule_signature
 from ..money import to_major, to_minor
 from ..providers import ProviderError, csv_import
-from ..schemas import BudgetUpsert, MerchantCategory, RuleCreate, TransactionUpdate
-from ..services.categorise import CATEGORIES, normalise_merchant
-from ..services.sync import categorise_one, recategorise_all, upsert_transactions
+from ..schemas import BudgetUpsert, MerchantCategory, RuleCreate, RulePreview, TransactionUpdate
+from ..services import learn
+from ..services.categorise import (
+    CATEGORIES,
+    PAYMENT_TYPES,
+    CompiledRule,
+    categorise,
+    compile_rules,
+    normalise_merchant,
+    rule_key,
+)
+from ..services.sync import (
+    bank_key,
+    categorise_one,
+    recategorise_all,
+    rule_outcome,
+    rules_in_order,
+    upsert_transactions,
+)
 from ..services.transfers import NOT_A_TRANSFER, detect_transfers
 
 router = APIRouter(prefix="/api", tags=["transactions"])
@@ -33,6 +51,9 @@ def _serialise(txn: Transaction, accounts: dict[int, Account]) -> dict:
         "description": txn.description,
         "category": txn.category,
         "category_source": txn.category_source,
+        # Set when a rule or you renamed it: what the bank calls it.
+        "bank_merchant": txn.bank_merchant if txn.merchant_source else None,
+        "merchant_source": txn.merchant_source,
         "status": txn.status,
         "is_transfer": txn.is_transfer,
         "excluded": txn.excluded,
@@ -52,6 +73,7 @@ def list_transactions(
     search: str | None = None,
     include_transfers: bool = True,
     min_amount: float | None = None,
+    source: str | None = None,
     limit: int = 200,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -63,6 +85,8 @@ def list_transactions(
         stmt = stmt.where(Transaction.booked_on <= end)
     if category:
         stmt = stmt.where(Transaction.category == category)
+    if source:  # who set the category: auto, rule, manual or learned
+        stmt = stmt.where(Transaction.category_source == source)
     if account_id:
         stmt = stmt.where(Transaction.account_id == account_id)
     if not include_transfers:
@@ -103,12 +127,20 @@ def update_transaction(transaction_id: int, payload: TransactionUpdate, db: Sess
         txn.category = payload.category
         txn.category_source = "manual"
     if payload.merchant is not None:
-        txn.merchant = payload.merchant
-        txn.merchant_key = normalise_merchant(payload.merchant)
+        name = payload.merchant.strip()
+        if txn.merchant_source is None:  # keep the bank's name, to go back to
+            txn.bank_merchant, txn.bank_merchant_key = txn.merchant, txn.merchant_key
+        if name:
+            txn.merchant, txn.merchant_key, txn.merchant_source = name, rule_key(name), "manual"
+        else:  # an empty name: back to the bank's, and to your rules
+            txn.merchant = txn.bank_merchant or txn.merchant
+            txn.merchant_key = bank_key(txn)
+            txn.bank_merchant = txn.bank_merchant_key = txn.merchant_source = None
     if payload.notes is not None:
         txn.notes = payload.notes
     if payload.excluded is not None:
-        txn.excluded = payload.excluded
+        # Yours either way: a rule won't put it back in, or take it out again.
+        txn.excluded, txn.excluded_source = payload.excluded, "manual"
     if payload.is_transfer is not None and payload.is_transfer != txn.is_transfer:
         txn.is_transfer = payload.is_transfer
         # Your say is final: never paired again, or kept out of the totals for good.
@@ -127,37 +159,98 @@ def categories(db: Session = Depends(get_db)) -> dict:
 
 
 # --- rules -------------------------------------------------------------------
-@router.get("/rules")
-def list_rules(db: Session = Depends(get_db)) -> dict:
-    rules = db.scalars(select(CategoryRule).order_by(CategoryRule.priority, CategoryRule.id))
+def _rule_json(rule: CategoryRule) -> dict:
     return {
-        "rules": [
-            {
-                "id": r.id,
-                "pattern": r.pattern,
-                "match_type": r.match_type,
-                "field": r.field,
-                "category": r.category,
-                "priority": r.priority,
-            }
-            for r in rules
-        ]
+        "id": rule.id,
+        "pattern": rule.pattern,
+        "match_type": rule.match_type,
+        "field": rule.field,
+        "direction": rule.direction,
+        "amount_min": None if rule.amount_min_minor is None else to_major(rule.amount_min_minor),
+        "amount_max": None if rule.amount_max_minor is None else to_major(rule.amount_max_minor),
+        "account_id": rule.account_id,
+        "payment_type": rule.payment_type,
+        "category": rule.category or None,
+        "rename_to": rule.rename_to,
+        "exclude": bool(rule.exclude),
+        "priority": rule.priority,
     }
 
 
-def save_rule(
-    db: Session, pattern: str, match_type: str, field: str, category: str, priority: int | None = None
-) -> CategoryRule:
-    """Save a rule, or change the one already saved for this pattern. The
-    database allows one per pattern; if a save at the same moment got there
-    first, that one is changed instead."""
-    where = (CategoryRule.pattern == pattern, CategoryRule.match_type == match_type, CategoryRule.field == field)
+@router.get("/rules")
+def list_rules(db: Session = Depends(get_db)) -> dict:
+    """In the order they're checked: the most specific first."""
+    return {"rules": [_rule_json(r) for r in rules_in_order(db)]}
+
+
+def _rule_values(payload: RuleCreate, db: Session, *, need_action: bool = True) -> tuple[dict, dict]:
+    """The rule's conditions and actions, checked and in stored form."""
+    pattern = payload.pattern.strip()
+    if payload.match_type == "regex":
+        # A regex keeps its case: lower-casing would turn \S into \s.
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise HTTPException(status_code=400, detail=f"That isn't a valid regular expression: {exc}") from exc
+    else:
+        pattern = pattern.lower()
+    # "From £0" says nothing, so it's no condition; "up to £0" is one.
+    low = to_minor(payload.amount_min) if payload.amount_min else None
+    high = to_minor(payload.amount_max) if payload.amount_max is not None else None
+    if low is not None and high is not None and low > high:
+        raise HTTPException(status_code=400, detail="The smallest amount is more than the largest")
+    payment_type = payload.payment_type or None
+    if payment_type and payment_type not in PAYMENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown kind of payment: {payment_type}")
+    if payload.account_id is not None and db.get(Account, payload.account_id) is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    conditions = {
+        "pattern": pattern,
+        # Without text these say nothing; the defaults keep one rule per set of conditions.
+        "match_type": payload.match_type if pattern else "contains",
+        "field": payload.field if pattern else "merchant",
+        "direction": payload.direction,
+        "amount_min_minor": low,
+        "amount_max_minor": high,
+        "account_id": payload.account_id,
+        "payment_type": payment_type,
+    }
+    if not (
+        pattern
+        or payload.direction
+        or low is not None
+        or high is not None
+        or payload.account_id is not None
+        or payment_type
+    ):
+        raise HTTPException(status_code=400, detail="A rule needs at least one condition")
+    actions = {
+        "category": (payload.category or "").strip(),
+        "rename_to": (payload.rename_to or "").strip() or None,
+        "exclude": payload.exclude,
+    }
+    if need_action and not (actions["category"] or actions["rename_to"] or actions["exclude"]):
+        raise HTTPException(
+            status_code=400,
+            detail="A rule needs something to do: a category, a new name, or leaving it out of the totals",
+        )
+    return conditions, actions
+
+
+def save_rule(db: Session, conditions: dict, actions: dict, priority: int | None = None) -> CategoryRule:
+    """Save a rule, or change the one already saved with these conditions.
+    Only the actions given change. The database allows one rule per set of
+    conditions; if a save at the same moment got there first, that one is
+    changed instead."""
+    signature = rule_signature(**conditions)
     for _ in range(2):
-        rule = db.scalar(select(CategoryRule).where(*where))
+        rule = db.scalar(select(CategoryRule).where(CategoryRule.signature == signature))
         if rule is None:
-            rule = CategoryRule(pattern=pattern, match_type=match_type, field=field)
+            rule = CategoryRule(**conditions)
             db.add(rule)
-        rule.category = category
+        for name, value in actions.items():
+            setattr(rule, name, value)
         if priority is not None:
             rule.priority = priority
         try:
@@ -170,12 +263,129 @@ def save_rule(
 
 @router.post("/rules")
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
-    pattern = payload.pattern.strip()
-    # A regex keeps its case: lower-casing would turn \S into \s.
-    pattern = pattern if payload.match_type == "regex" else pattern.lower()
-    rule = save_rule(db, pattern, payload.match_type, payload.field, payload.category, payload.priority)
+    conditions, actions = _rule_values(payload, db)
+    rule = save_rule(db, conditions, actions, payload.priority)
     changed = recategorise_all(db) if payload.apply_now else 0
     return {"id": rule.id, "recategorised": changed}
+
+
+@router.put("/rules/{rule_id}")
+def update_rule(rule_id: int, payload: RuleCreate, db: Session = Depends(get_db)) -> dict:
+    rule = db.get(CategoryRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    conditions, actions = _rule_values(payload, db)
+    clash = db.scalar(
+        select(CategoryRule.id).where(
+            CategoryRule.signature == rule_signature(**conditions), CategoryRule.id != rule_id
+        )
+    )
+    if clash is not None:
+        raise HTTPException(status_code=409, detail="Another rule has exactly these conditions: change that one")
+    for name, value in {**conditions, **actions}.items():
+        setattr(rule, name, value)
+    if "priority" in payload.model_fields_set:
+        rule.priority = payload.priority
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Another rule has exactly these conditions") from exc
+    changed = recategorise_all(db) if payload.apply_now else 0
+    return {"id": rule.id, "recategorised": changed}
+
+
+@router.post("/rules/preview")
+def preview_rule(payload: RulePreview, db: Session = Depends(get_db)) -> dict:
+    """What a rule would do, before it's saved: the transactions it matches,
+    and how many of them it would change. Your own choices stay as they are.
+    It works before an action is chosen, to show what the conditions catch."""
+    conditions, actions = _rule_values(payload, db, need_action=False)
+    existing = db.get(CategoryRule, payload.rule_id) if payload.rule_id is not None else None
+    priority = payload.priority if existing is None or "priority" in payload.model_fields_set else existing.priority
+    candidate = CompiledRule.of(CategoryRule(**conditions, **actions, priority=priority, id=payload.rule_id))
+    rules = compile_rules([r for r in rules_in_order(db) if r.id != payload.rule_id] + [candidate])
+    # An edit also changes what the old version matched and the new one doesn't.
+    before = CompiledRule.of(existing) if existing is not None else None
+
+    rows = db.scalars(
+        select(Transaction)
+        .where(Transaction.is_transfer.is_(False))
+        .order_by(Transaction.booked_on.desc(), Transaction.id.desc())
+    )
+    accounts = {a.id: a for a in db.scalars(select(Account))}
+    matches = changes = 0
+    examples = []
+    for txn in rows:
+        keys = tuple({bank_key(txn), txn.merchant_key})
+        facts = (txn.description, txn.amount_minor, txn.account_id, txn.payment_type)
+        matched = candidate.matches(keys, *facts)
+        if not matched and not (before is not None and before.matches(keys, *facts)):
+            continue
+        matches += matched
+        after = _after_rules(txn, rules)
+        changed = after != (txn.merchant, txn.category, txn.excluded)
+        changes += changed
+        if len(examples) < 8 and (matched or changed):
+            account = accounts.get(txn.account_id)
+            examples.append(
+                {
+                    "id": txn.id,
+                    "date": txn.booked_on.isoformat(),
+                    "amount": to_major(txn.amount_minor),
+                    "description": txn.description,
+                    "account": account.name if account else "",
+                    "merchant": txn.merchant,
+                    "category": txn.category,
+                    "excluded": txn.excluded,
+                    "new_merchant": after[0],
+                    "new_category": after[1],
+                    "new_excluded": after[2],
+                    "changes": changed,
+                    # False: the rule as it was matched it, and the edit lets it go.
+                    "matched": matched,
+                }
+            )
+    return {"matches": matches, "changes": changes, "examples": examples}
+
+
+def _after_rules(txn: Transaction, rules: list[CompiledRule]) -> tuple[str, str, bool]:
+    """(merchant, category, excluded) once `rules` apply, without saving."""
+    outcome = rule_outcome(txn, rules)
+    merchant, merchant_key = txn.merchant, txn.merchant_key
+    if txn.merchant_source != "manual":
+        if outcome.rename:
+            merchant, merchant_key = outcome.rename, rule_key(outcome.rename)
+        elif txn.merchant_source == "rule":
+            merchant, merchant_key = txn.bank_merchant or merchant, bank_key(txn)
+    excluded = txn.excluded
+    if txn.excluded_source != "manual":
+        excluded = bool(outcome.exclude) or (txn.excluded and txn.excluded_source != "rule")
+
+    category = txn.category
+    if txn.category_source != "manual":
+        if outcome.category:
+            category = outcome.category
+        # Worked out again, as saving does, when what it's worked out from
+        # changes: a new name, or no rule filing it any more. Otherwise the
+        # stored category stands: it also carries the second looks the preview
+        # doesn't take (salary, tutoring, learning).
+        elif merchant_key != txn.merchant_key or txn.category_source == "rule":
+            fresh = categorise(
+                merchant=merchant,
+                description=txn.description,
+                amount_minor=txn.amount_minor,
+                mcc=txn.mcc,
+                provider_category=txn.provider_category,
+                payment_type=txn.payment_type,
+                merchant_key=merchant_key,
+                not_a_transfer=txn.transfer_group == NOT_A_TRANSFER,
+                outcome=outcome,
+            )[0]
+            # Learning goes by the bank's name, so a rename doesn't undo it.
+            if not (fresh == "Uncategorised" and txn.category_source == learn.LEARNED):
+                category = fresh
+    return merchant, category, excluded
 
 
 @router.delete("/rules/{rule_id}")
@@ -194,44 +404,69 @@ def uncategorised_merchants(days: int = 180, limit: int = 40, db: Session = Depe
     """Uncategorised spending grouped by merchant, biggest first: the list to
     work down, one merchant (and every future payment to it) at a time."""
     since = dt.date.today() - dt.timedelta(days=max(days, 1))
-    rows = db.scalars(
-        select(Transaction)
-        .where(
-            Transaction.category == "Uncategorised",
-            Transaction.booked_on >= since,
-            Transaction.is_transfer.is_(False),
-            Transaction.excluded.is_(False),
-            Transaction.amount_minor < 0,
+    # All money out: what you've categorised, at any time, is what's learned from.
+    money_out = list(
+        db.scalars(
+            select(Transaction)
+            .where(Transaction.is_transfer.is_(False), Transaction.amount_minor < 0)
+            .order_by(Transaction.booked_on.desc())
         )
-        .order_by(Transaction.booked_on.desc())
     )
+    learner = learn.Learner.from_rows(money_out)
     accounts = {a.id: a for a in db.scalars(select(Account))}
-    groups: dict[str, dict] = {}
-    for txn in rows:
-        key = txn.merchant_key or normalise_merchant(txn.merchant) or txn.merchant.lower()
-        group = groups.get(key)
-        if group is None:  # newest first, so this is the latest payment
-            account = accounts.get(txn.account_id)
-            group = groups[key] = {
-                "merchant": txn.merchant,
-                "merchant_key": key,
-                "example": txn.description,
-                "last_date": txn.booked_on.isoformat(),
-                "account": account.name if account else "",
-                "transactions": 0,
-                "total_minor": 0,
-            }
-        group["transactions"] += 1
-        group["total_minor"] -= txn.amount_minor
 
-    ranked = sorted(groups.values(), key=lambda g: g["total_minor"], reverse=True)
+    def grouped(rows: list[Transaction]) -> tuple[list[dict], dict[str, list[Transaction]]]:
+        groups: dict[str, dict] = {}
+        members: dict[str, list[Transaction]] = defaultdict(list)
+        for txn in rows:
+            key = txn.merchant_key or normalise_merchant(txn.merchant) or txn.merchant.lower()
+            group = groups.get(key)
+            if group is None:  # newest first, so this is the latest payment
+                account = accounts.get(txn.account_id)
+                group = groups[key] = {
+                    "merchant": txn.merchant,
+                    "merchant_key": key,
+                    "example": txn.description,
+                    "last_date": txn.booked_on.isoformat(),
+                    "account": account.name if account else "",
+                    "category": txn.category,
+                    "transactions": 0,
+                    "total_minor": 0,
+                }
+            group["transactions"] += 1
+            group["total_minor"] -= txn.amount_minor
+            members[key].append(txn)
+        return sorted(groups.values(), key=lambda g: g["total_minor"], reverse=True), members
+
+    recent = [t for t in money_out if t.booked_on >= since and not t.excluded]
+    ranked, members = grouped([t for t in recent if t.category == "Uncategorised"])
+    for group in ranked:
+        guess = learner.guess_for(members[group["merchant_key"]])
+        group["suggestion"] = (
+            {"category": guess.category, "probability": guess.probability, "because": guess.because}
+            if guess and guess.suggests
+            else None
+        )
+    # Filed by learning: listed to check, until you confirm or change them.
+    learned, _ = grouped([t for t in recent if t.category_source == learn.LEARNED])
+
+    def shown(groups: list[dict]) -> list[dict]:
+        return [
+            {**{k: v for k, v in g.items() if k != "total_minor"}, "total": to_major(g["total_minor"])}
+            for g in groups[: max(limit, 0)]
+        ]
+
     total = sum(g["total_minor"] for g in ranked)
     return {
         "days": days,
         "total": to_major(total),
         "transactions": sum(g["transactions"] for g in ranked),
         "merchant_count": len(ranked),
-        "merchants": [{**g, "total": to_major(g.pop("total_minor"))} for g in ranked[: max(limit, 0)]],
+        "learned_count": len(learned),
+        # How many merchants you've categorised, to learn from.
+        "learned_from": len(learner.examples),
+        "merchants": shown(ranked),
+        "learned": shown(learned),
     }
 
 
@@ -253,7 +488,13 @@ def categorise_merchant(payload: MerchantCategory, db: Session = Depends(get_db)
             or_(CategoryRule.field != "merchant", CategoryRule.match_type != match_type),
         )
     )
-    rule = save_rule(db, key, match_type, "merchant", category, 100 if others is None else min(others - 1, 100))
+    rule = save_rule(
+        db,
+        {"pattern": key, "match_type": match_type, "field": "merchant"},
+        # Only the category: a new name or exclusion on the same rule stays.
+        {"category": category},
+        100 if others is None else min(others - 1, 100),
+    )
     return {"rule_id": rule.id, "pattern": key, "category": category, "recategorised": recategorise_all(db)}
 
 

@@ -36,6 +36,11 @@ Assistant App.
 - ✅ **Budgets:** monthly limits per category, and how this month is tracking
 - ✅ **Subscriptions and bills:** found automatically, with price rises,
   duplicates and stopped payments flagged
+- ✅ **Rules:** match on the name, amount, account or kind of payment, then
+  set a category, rename the merchant or leave it out of the totals, with a
+  preview before saving
+- ✅ **Learns from your choices:** spending nothing else can place is filed
+  like similar merchants you've categorised, on the box itself
 - ✅ **Cash flow:** money in against money out, and a projection for the month
 - ✅ **Investments and net worth:** Trading 212 holdings, the pension and other
   assets, and a daily net-worth history
@@ -164,7 +169,10 @@ bank is connected. Only one sync runs at a time.
 2. Store them in one format: amounts in pence, money out negative. Rows
    already stored are updated rather than added twice.
 3. Categorise each transaction: your own rules first, then keywords, the
-   card's merchant code, then the bank's own category.
+   card's merchant code, then the bank's own category. Spending still
+   uncategorised is filed like similar merchants you've categorised, when the
+   match is clear. Rules can also rename merchants and leave payments out of
+   the totals.
 4. Pair transfers between your own accounts, so paying off a credit card isn't
    counted as spending and income.
 5. Record the day's net worth.

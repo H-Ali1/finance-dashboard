@@ -298,7 +298,11 @@ export interface Transaction {
   merchant_key: string;
   description: string;
   category: string;
+  /** auto | rule | manual | learned */
   category_source: string;
+  /** What the bank calls the merchant, when a rule or you renamed it. */
+  bank_merchant: string | null;
+  merchant_source: "rule" | "manual" | null;
   status: string;
   is_transfer: boolean;
   excluded: boolean;
@@ -314,8 +318,12 @@ export interface UncategorisedMerchant {
   example: string;
   last_date: string;
   account: string;
+  /** "Uncategorised", or for a learned row the category it was filed in. */
+  category: string;
   transactions: number;
   total: number;
+  /** A guess from the merchants you've categorised, when there's a fair one. */
+  suggestion?: { category: string; probability: number; because: string[] } | null;
 }
 
 export interface UncategorisedList {
@@ -323,7 +331,53 @@ export interface UncategorisedList {
   total: number;
   transactions: number;
   merchant_count: number;
+  /** Merchants filed by learning, waiting for you to check. */
+  learned_count: number;
+  /** How many merchants you've categorised, to learn from. */
+  learned_from: number;
   merchants: UncategorisedMerchant[];
+  learned: UncategorisedMerchant[];
+}
+
+export type MatchType = "contains" | "words" | "exact" | "regex";
+
+/** A rule: every condition set must hold, then every action applies. */
+export interface Rule {
+  id: number;
+  pattern: string;
+  match_type: MatchType;
+  field: "merchant" | "description";
+  direction: "in" | "out" | null;
+  /** The size of the amount in pounds, whichever way the money went. */
+  amount_min: number | null;
+  amount_max: number | null;
+  account_id: number | null;
+  payment_type: string | null;
+  category: string | null;
+  rename_to: string | null;
+  exclude: boolean;
+  priority: number;
+}
+
+export interface RulePreview {
+  matches: number;
+  changes: number;
+  examples: {
+    id: number;
+    date: string;
+    amount: number;
+    description: string;
+    account: string;
+    merchant: string;
+    category: string;
+    excluded: boolean;
+    new_merchant: string;
+    new_category: string;
+    new_excluded: boolean;
+    changes: boolean;
+    /** False: the rule before this edit matched it, and the edit lets it go. */
+    matched: boolean;
+  }[];
 }
 
 export interface Connection {

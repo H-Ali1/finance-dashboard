@@ -9,6 +9,12 @@ Order of precedence, highest first:
   5. the merchant category code (MCC) the card network supplied
   6. the provider's own category (Starling's, which you can also set in the
      Starling app, and TrueLayer's classification for HSBC, Amex, ...)
+  7. a guess learned from the merchants you've categorised (see learn.py),
+     for money out that nothing above could place
+
+Rules can also rename the merchant and leave a transaction out of the
+totals. Each action comes from the most specific rule that matches and has
+it: one rule can name a merchant while another, narrower one files it.
 
 Keywords match whole words, so "bar" finds "The Bar" but not "Barclays". The
 keyword nearest the start of the description wins, since that's where the
@@ -19,6 +25,8 @@ same word the longer one wins ("Amazon Prime" is a subscription).
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 
 CATEGORIES = [
     "Salary",
@@ -923,6 +931,188 @@ def _payment_type_category(payment_type: str | None, amount_minor: int) -> str |
     return None
 
 
+MATCH_TYPES = ("contains", "words", "exact", "regex")
+RULE_FIELDS = ("merchant", "description")
+DIRECTIONS = ("in", "out")
+
+
+@dataclass(slots=True)
+class RuleOutcome:
+    """What your rules say about one transaction. None: no rule says."""
+
+    category: str | None = None
+    rename: str | None = None
+    exclude: bool = False
+
+
+def rule_key(name: str) -> str:
+    """The merchant key for a name, as rules and grouping see it. A name in a
+    script other than Latin normalises to nothing, so it's kept as written."""
+    return normalise_merchant(name) or (name or "").strip().lower()
+
+
+def rule_conditions(rule) -> int:
+    """How many conditions a rule sets."""
+    return sum(
+        (
+            bool(rule.pattern),
+            bool(rule.direction),
+            rule.amount_min_minor is not None,
+            rule.amount_max_minor is not None,
+            rule.account_id is not None,
+            bool(rule.payment_type),
+        )
+    )
+
+
+def rule_order(rule) -> tuple:
+    """Most specific first. A rule naming the merchant or description beats
+    one that doesn't (a payer you named, over "money into this account");
+    then the one with more conditions; then the longer text ("amazon prime"
+    before "amazon"); then priority; then the one saved most recently."""
+    pattern = rule.pattern or ""
+    newest = rule.id if rule.id is not None else 10**12  # one not saved yet is newest
+    priority = 100 if rule.priority is None else rule.priority  # 0 is a priority, not a missing one
+    return (0 if pattern else 1, -rule_conditions(rule), -len(pattern), priority, -newest)
+
+
+@dataclass(slots=True, frozen=True)
+class CompiledRule:
+    """A rule read once, its text test built once: checking thousands of
+    transactions against it then costs little. Same attribute names as the
+    stored rule, so rule_order and rule_conditions take either."""
+
+    id: int | None
+    pattern: str
+    field: str
+    direction: str | None
+    amount_min_minor: int | None
+    amount_max_minor: int | None
+    account_id: int | None
+    payment_type: str | None
+    category: str
+    rename_to: str | None
+    exclude: bool
+    priority: int
+    conditions: int
+    text: Callable[[str], bool] | None
+
+    @classmethod
+    def of(cls, rule) -> CompiledRule:
+        if isinstance(rule, CompiledRule):
+            return rule
+        return cls(
+            id=rule.id,
+            pattern=rule.pattern or "",
+            field=rule.field or "merchant",
+            direction=rule.direction,
+            amount_min_minor=rule.amount_min_minor,
+            amount_max_minor=rule.amount_max_minor,
+            account_id=rule.account_id,
+            payment_type=rule.payment_type,
+            category=rule.category or "",
+            rename_to=(rule.rename_to or "").strip() or None,
+            exclude=bool(rule.exclude),
+            priority=100 if rule.priority is None else rule.priority,
+            conditions=rule_conditions(rule),
+            text=_text_test(rule.pattern or "", rule.match_type) if rule.pattern else None,
+        )
+
+    def matches(
+        self,
+        keys: tuple[str, ...],
+        description: str,
+        amount_minor: int,
+        account_id: int | None,
+        payment_type: str | None,
+    ) -> bool:
+        if not self.conditions:
+            return False
+        # The cheap checks first.
+        if self.direction == "in" and amount_minor <= 0:
+            return False
+        if self.direction == "out" and amount_minor >= 0:
+            return False
+        size = abs(amount_minor)
+        if self.amount_min_minor is not None and size < self.amount_min_minor:
+            return False
+        if self.amount_max_minor is not None and size > self.amount_max_minor:
+            return False
+        if self.account_id is not None and account_id != self.account_id:
+            return False
+        if self.payment_type and payment_type != self.payment_type:
+            return False
+        if self.text is None:
+            return True
+        if self.field == "merchant":
+            return any(self.text(key) for key in keys if key)
+        return self.text((description or "").lower())
+
+
+def compile_rules(rules) -> list[CompiledRule]:
+    """Most specific first, ready to check many transactions against."""
+    return sorted((CompiledRule.of(rule) for rule in rules), key=rule_order)
+
+
+def rule_matches(
+    rule,
+    *,
+    keys: tuple[str, ...],
+    description: str,
+    amount_minor: int,
+    account_id: int | None = None,
+    payment_type: str | None = None,
+) -> bool:
+    """Every condition the rule sets holds. A rule with none matches nothing.
+    `keys` are the merchant's keys: the bank's, and a name given since."""
+    return CompiledRule.of(rule).matches(keys, description, amount_minor, account_id, payment_type)
+
+
+def evaluate_rules(
+    rules: list,
+    *,
+    bank_key: str,
+    description: str,
+    amount_minor: int,
+    account_id: int | None = None,
+    payment_type: str | None = None,
+    own_key: str | None = None,
+    can_rename: bool = True,
+) -> RuleOutcome:
+    """`rules` most specific first (rule_order), ideally from compile_rules.
+    A rename is decided on what the bank sent, so it can't undo itself; the
+    other actions also see the new name, so a rule made on the new name still
+    applies. `own_key` is a name you gave the merchant yourself, which no
+    rule replaces."""
+    rules = [CompiledRule.of(rule) for rule in rules]
+    facts = (description, amount_minor, account_id, payment_type)
+    rename = None
+    if can_rename:
+        rename = next(
+            (rule.rename_to for rule in rules if rule.rename_to and rule.matches((bank_key,), *facts)),
+            None,
+        )
+    keys = (bank_key,)
+    new_key = rule_key(rename) if rename else own_key
+    if new_key and new_key != bank_key:
+        keys += (new_key,)
+
+    category = next(
+        (
+            rule.category
+            for rule in rules
+            # A rule that says "this payer is tutoring" is about money they
+            # send you, not money you send them.
+            if rule.category
+            and not (rule.category in INCOME_CATEGORIES and amount_minor <= 0)
+            and rule.matches(keys, *facts)
+        ),
+        None,
+    )
+    exclude = any(rule.exclude and rule.matches(keys, *facts) for rule in rules)
+    return RuleOutcome(category=category, rename=rename, exclude=exclude)
+
+
 def categorise(
     *,
     merchant: str,
@@ -934,9 +1124,12 @@ def categorise(
     rules: list | None = None,
     merchant_key: str | None = None,
     not_a_transfer: bool = False,
+    account_id: int | None = None,
+    outcome: RuleOutcome | None = None,
 ) -> tuple[str, str]:
     """Returns (category, source). Pass the stored `merchant_key` for a saved
-    transaction, so rules see the key they were made from.
+    transaction, so rules see the key they were made from, or the `outcome`
+    of evaluate_rules when it has been worked out already.
 
     Money in is income only when it's earned or given. Money back from a
     shop is a refund: it keeps the shop's category, so it reduces that
@@ -945,17 +1138,18 @@ def categorise(
     description_key = (description or "").lower()
     money_in = amount_minor > 0
 
-    # A name in a script other than Latin normalises to nothing; rules then
-    # match the name as written.
-    rule_merchant = merchant_key or (merchant or description or "").strip().lower()
-    for rule in rules or []:
-        # A rule that says "this payer is tutoring" is about money they send
-        # you, not money you send them.
-        if rule.category in INCOME_CATEGORIES and not money_in:
-            continue
-        target = rule_merchant if rule.field == "merchant" else description_key
-        if _rule_matches(rule, target):
-            return rule.category, "rule"
+    if outcome is None and rules:
+        outcome = evaluate_rules(
+            rules,
+            bank_key=merchant_key or (merchant or description or "").strip().lower(),
+            description=description,
+            amount_minor=amount_minor,
+            account_id=account_id,
+            payment_type=payment_type,
+            can_rename=False,
+        )
+    if outcome is not None and outcome.category:
+        return outcome.category, "rule"
 
     if by_type := _payment_type_category(payment_type, amount_minor):
         return by_type, "auto"
@@ -998,20 +1192,28 @@ def categorise(
     return "Income", "auto"
 
 
-def _rule_matches(rule, target: str) -> bool:
-    pattern = (rule.pattern or "").lower()
-    if not pattern or not target:
-        return False
-    if rule.match_type == "exact":
-        return target.strip() == pattern.strip()
-    if rule.match_type == "words":
+def _never(_target: str) -> bool:
+    return False
+
+
+def _text_test(raw_pattern: str, match_type: str | None) -> Callable[[str], bool]:
+    """A test for a rule's text, against a lower-cased target."""
+    pattern = raw_pattern.lower()
+    if not pattern:
+        return _never
+    if match_type == "exact":
+        wanted = pattern.strip()
+        return lambda target: bool(target) and target.strip() == wanted
+    if match_type == "words":
         # The pattern as whole words: "example homes" finds "example homes
         # flat 2", but "pret" doesn't find "interpret".
-        return re.search(rf"(?<![a-z0-9]){re.escape(pattern.strip())}(?![a-z0-9])", target) is not None
-    if rule.match_type == "regex":
+        search = re.compile(rf"(?<![a-z0-9]){re.escape(pattern.strip())}(?![a-z0-9])").search
+        return lambda target: bool(target) and search(target) is not None
+    if match_type == "regex":
         try:
             # As written: lower-casing would turn \S into \s.
-            return re.search(rule.pattern, target, re.IGNORECASE) is not None
+            search = re.compile(raw_pattern, re.IGNORECASE).search
         except re.error:
-            return False
-    return pattern in target
+            return _never
+        return lambda target: bool(target) and search(target) is not None
+    return lambda target: bool(target) and pattern in target

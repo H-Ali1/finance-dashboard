@@ -6,6 +6,7 @@ import Dashboard from "./components/Dashboard";
 import Income from "./components/Income";
 import Insights from "./components/Insights";
 import NetWorth from "./components/NetWorth";
+import Rules from "./components/Rules";
 import Spending from "./components/Spending";
 import Subscriptions from "./components/Subscriptions";
 import Transactions from "./components/Transactions";
@@ -22,6 +23,7 @@ const TABS = [
   { key: "cashflow", label: "Cash flow" },
   { key: "networth", label: "Net worth" },
   { key: "transactions", label: "Transactions" },
+  { key: "rules", label: "Rules" },
   { key: "connections", label: "Connections" },
 ];
 
@@ -138,6 +140,7 @@ export default function App() {
             {tab === "cashflow" && <Cashflow />}
             {tab === "networth" && <NetWorth />}
             {tab === "transactions" && <Transactions />}
+            {tab === "rules" && <Rules />}
             {tab === "connections" && <Connections onSynced={() => setVersion((v) => v + 1)} />}
           </div>
         </div>

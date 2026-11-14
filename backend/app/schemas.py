@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,12 +32,31 @@ class TransactionUpdate(BaseModel):
 
 
 class RuleCreate(BaseModel):
-    pattern: str
-    category: str
-    match_type: str = "contains"
-    field: str = "merchant"
+    """A rule: every condition given must hold, then every action applies.
+    At least one of each."""
+
+    # --- conditions
+    pattern: str = Field(default="", max_length=160)
+    match_type: Literal["contains", "words", "exact", "regex"] = "contains"
+    field: Literal["merchant", "description"] = "merchant"
+    direction: Literal["in", "out"] | None = None
+    # The size of the amount in pounds, whichever way the money went.
+    amount_min: float | None = Field(default=None, ge=0)
+    amount_max: float | None = Field(default=None, ge=0)
+    account_id: int | None = None
+    payment_type: str | None = None
+    # --- actions
+    category: str | None = Field(default=None, max_length=48)
+    rename_to: str | None = Field(default=None, max_length=160)
+    exclude: bool = False
+
     priority: int = 100
     apply_now: bool = True
+
+
+class RulePreview(RuleCreate):
+    # The rule being changed, when editing one.
+    rule_id: int | None = None
 
 
 class MerchantCategory(BaseModel):
