@@ -375,6 +375,8 @@ export interface RulePreview {
     new_category: string;
     new_excluded: boolean;
     changes: boolean;
+    /** False: the rule before this edit matched it, and the edit lets it go. */
+    matched: boolean;
   }[];
 }
 

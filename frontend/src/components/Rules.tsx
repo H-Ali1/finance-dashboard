@@ -46,6 +46,9 @@ export default function Rules() {
         </div>
       )}
 
+      {categories.error && <ErrorBanner message={`Categories didn't load: ${categories.error}`} onRetry={categories.reload} />}
+      {accounts.error && <ErrorBanner message={`Accounts didn't load: ${accounts.error}`} onRetry={accounts.reload} />}
+
       {editing && (
         <RuleEditor
           key={editing.id ?? "new"}
@@ -54,7 +57,9 @@ export default function Rules() {
           accounts={accountList}
           onClose={() => setEditing(null)}
           onSaved={(text) => {
-            setEditing(null);
+            // Only this editor closes: another may have opened while it saved.
+            const owner = editing;
+            setEditing((current) => (current === owner ? null : current));
             setMessage(text);
             setVersion((v) => v + 1);
           }}

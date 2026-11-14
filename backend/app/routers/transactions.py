@@ -194,8 +194,9 @@ def _rule_values(payload: RuleCreate, db: Session, *, need_action: bool = True) 
             raise HTTPException(status_code=400, detail=f"That isn't a valid regular expression: {exc}") from exc
     else:
         pattern = pattern.lower()
+    # "From £0" says nothing, so it's no condition; "up to £0" is one.
     low = to_minor(payload.amount_min) if payload.amount_min else None
-    high = to_minor(payload.amount_max) if payload.amount_max else None
+    high = to_minor(payload.amount_max) if payload.amount_max is not None else None
     if low is not None and high is not None and low > high:
         raise HTTPException(status_code=400, detail="The smallest amount is more than the largest")
     payment_type = payload.payment_type or None
@@ -215,7 +216,14 @@ def _rule_values(payload: RuleCreate, db: Session, *, need_action: bool = True) 
         "account_id": payload.account_id,
         "payment_type": payment_type,
     }
-    if not (pattern or payload.direction or low or high or payload.account_id is not None or payment_type):
+    if not (
+        pattern
+        or payload.direction
+        or low is not None
+        or high is not None
+        or payload.account_id is not None
+        or payment_type
+    ):
         raise HTTPException(status_code=400, detail="A rule needs at least one condition")
     actions = {
         "category": (payload.category or "").strip(),
@@ -297,6 +305,8 @@ def preview_rule(payload: RulePreview, db: Session = Depends(get_db)) -> dict:
     priority = payload.priority if existing is None or "priority" in payload.model_fields_set else existing.priority
     candidate = CompiledRule.of(CategoryRule(**conditions, **actions, priority=priority, id=payload.rule_id))
     rules = compile_rules([r for r in rules_in_order(db) if r.id != payload.rule_id] + [candidate])
+    # An edit also changes what the old version matched and the new one doesn't.
+    before = CompiledRule.of(existing) if existing is not None else None
 
     rows = db.scalars(
         select(Transaction)
@@ -308,13 +318,15 @@ def preview_rule(payload: RulePreview, db: Session = Depends(get_db)) -> dict:
     examples = []
     for txn in rows:
         keys = tuple({bank_key(txn), txn.merchant_key})
-        if not candidate.matches(keys, txn.description, txn.amount_minor, txn.account_id, txn.payment_type):
+        facts = (txn.description, txn.amount_minor, txn.account_id, txn.payment_type)
+        matched = candidate.matches(keys, *facts)
+        if not matched and not (before is not None and before.matches(keys, *facts)):
             continue
-        matches += 1
+        matches += matched
         after = _after_rules(txn, rules)
         changed = after != (txn.merchant, txn.category, txn.excluded)
         changes += changed
-        if len(examples) < 8:
+        if len(examples) < 8 and (matched or changed):
             account = accounts.get(txn.account_id)
             examples.append(
                 {
@@ -330,6 +342,8 @@ def preview_rule(payload: RulePreview, db: Session = Depends(get_db)) -> dict:
                     "new_category": after[1],
                     "new_excluded": after[2],
                     "changes": changed,
+                    # False: the rule as it was matched it, and the edit lets it go.
+                    "matched": matched,
                 }
             )
     return {"matches": matches, "changes": changes, "examples": examples}
@@ -352,8 +366,12 @@ def _after_rules(txn: Transaction, rules: list[CompiledRule]) -> tuple[str, str,
     if txn.category_source != "manual":
         if outcome.category:
             category = outcome.category
-        elif txn.category_source == "rule":  # no rule files it any more
-            category = categorise(
+        # Worked out again, as saving does, when what it's worked out from
+        # changes: a new name, or no rule filing it any more. Otherwise the
+        # stored category stands: it also carries the second looks the preview
+        # doesn't take (salary, tutoring, learning).
+        elif merchant_key != txn.merchant_key or txn.category_source == "rule":
+            fresh = categorise(
                 merchant=merchant,
                 description=txn.description,
                 amount_minor=txn.amount_minor,
@@ -361,8 +379,12 @@ def _after_rules(txn: Transaction, rules: list[CompiledRule]) -> tuple[str, str,
                 provider_category=txn.provider_category,
                 payment_type=txn.payment_type,
                 merchant_key=merchant_key,
+                not_a_transfer=txn.transfer_group == NOT_A_TRANSFER,
                 outcome=outcome,
             )[0]
+            # Learning goes by the bank's name, so a rename doesn't undo it.
+            if not (fresh == "Uncategorised" and txn.category_source == learn.LEARNED):
+                category = fresh
     return merchant, category, excluded
 
 

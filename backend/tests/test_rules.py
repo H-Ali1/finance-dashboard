@@ -289,3 +289,59 @@ def test_the_preview_shows_matches_before_an_action_is_chosen(fresh_db):
     _pay(fresh_db, account, ("KESTREL NORTH", -1200), ("FENWORTH OAK", -300))
     result = preview_rule(RulePreview(pattern="kestrel", match_type="words"), db=fresh_db)
     assert (result["matches"], result["changes"]) == (1, 0)
+
+
+# --- review follow-ups ----------------------------------------------------------------
+def test_a_largest_amount_of_zero_is_kept(fresh_db):
+    """ "Up to £0" is a condition; it isn't dropped as if it were no limit."""
+    account = _account(fresh_db)
+    _pay(fresh_db, account, ("KESTREL NORTH", -500))
+    rule_id = create_rule(RuleCreate(pattern="kestrel", amount_max=0, exclude=True), db=fresh_db)["id"]
+    assert fresh_db.get(CategoryRule, rule_id).amount_max_minor == 0
+    assert _row(fresh_db, "KESTREL NORTH").excluded is False
+    # On its own it's still a condition.
+    create_rule(RuleCreate(amount_max=0, category="Fees & Interest", apply_now=False), db=fresh_db)
+
+
+def test_a_priority_of_zero_comes_before_one():
+    first = CategoryRule(id=1, pattern="pret", match_type="words", priority=0, category="Eating Out")
+    second = CategoryRule(id=2, pattern="pret", match_type="words", priority=1, category="Shopping")
+    rules = sorted([second, first], key=rule_order)
+    assert categorise(merchant="PRET", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
+
+
+def test_a_merchant_choice_beats_a_rule_at_priority_one(fresh_db):
+    """Choosing a category then saves its rule at priority 0."""
+    fresh_db.add(CategoryRule(pattern="pret", match_type="contains", field="merchant", category="Shopping", priority=1))
+    fresh_db.commit()
+    categorise_merchant(MerchantCategory(merchant="Pret", category="Eating Out"), db=fresh_db)
+    rules = sync_service._rules(fresh_db)
+    assert categorise(merchant="PRET", description="", amount_minor=-450, rules=rules)[0] == "Eating Out"
+
+
+def test_the_preview_of_an_edit_shows_what_it_lets_go(fresh_db):
+    account = _account(fresh_db)
+    _pay(fresh_db, account, ("KESTREL NORTH", -1200), ("KESTREL SOUTH", -800))
+    rule_id = create_rule(RuleCreate(pattern="kestrel", match_type="words", exclude=True), db=fresh_db)["id"]
+    narrower = preview_rule(
+        RulePreview(pattern="kestrel north", match_type="words", exclude=True, rule_id=rule_id), db=fresh_db
+    )
+    assert (narrower["matches"], narrower["changes"]) == (1, 1)
+    (let_go,) = [e for e in narrower["examples"] if not e["matched"]]
+    assert (let_go["description"], let_go["excluded"], let_go["new_excluded"]) == ("KESTREL SOUTH", True, False)
+
+    # Saving does what the preview said.
+    update_rule(rule_id, RuleCreate(pattern="kestrel north", match_type="words", exclude=True), db=fresh_db)
+    assert _row(fresh_db, "KESTREL SOUTH").excluded is False
+
+
+def test_the_preview_files_a_renamed_merchant_as_saving_does(fresh_db):
+    account = _account(fresh_db)
+    _pay(fresh_db, account, ("KESTREL NORTH", -450))
+    rename = RuleCreate(pattern="kestrel", match_type="words", rename_to="Kestrel Cafe")
+    (example,) = preview_rule(RulePreview(**rename.model_dump()), db=fresh_db)["examples"]
+    assert (example["new_merchant"], example["new_category"]) == ("Kestrel Cafe", "Eating Out")
+
+    create_rule(rename, db=fresh_db)
+    row = _row(fresh_db, "KESTREL NORTH")
+    assert (row.merchant, row.category) == ("Kestrel Cafe", "Eating Out")

@@ -222,7 +222,9 @@ export default function Transactions() {
           accounts={accounts.data?.accounts ?? []}
           onClose={() => setRuleFor(null)}
           onSaved={(message) => {
-            setRuleFor(null);
+            // Only this editor closes: another may have opened while it saved.
+            const owner = ruleFor;
+            setRuleFor((current) => (current === owner ? null : current));
             setRuleResult(message);
             refresh();
           }}

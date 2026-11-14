@@ -972,7 +972,8 @@ def rule_order(rule) -> tuple:
     before "amazon"); then priority; then the one saved most recently."""
     pattern = rule.pattern or ""
     newest = rule.id if rule.id is not None else 10**12  # one not saved yet is newest
-    return (0 if pattern else 1, -rule_conditions(rule), -len(pattern), rule.priority or 100, -newest)
+    priority = 100 if rule.priority is None else rule.priority  # 0 is a priority, not a missing one
+    return (0 if pattern else 1, -rule_conditions(rule), -len(pattern), priority, -newest)
 
 
 @dataclass(slots=True, frozen=True)
@@ -1012,7 +1013,7 @@ class CompiledRule:
             category=rule.category or "",
             rename_to=(rule.rename_to or "").strip() or None,
             exclude=bool(rule.exclude),
-            priority=rule.priority or 100,
+            priority=100 if rule.priority is None else rule.priority,
             conditions=rule_conditions(rule),
             text=_text_test(rule.pattern or "", rule.match_type) if rule.pattern else None,
         )

@@ -263,14 +263,15 @@ function PreviewTable({ preview, problem }: { preview: RulePreview | null; probl
   if (problem) return <div className="secondary tiny">{problem}</div>;
   if (!preview) return <div className="muted tiny">Checking what it matches…</div>;
   const { matches, changes, examples } = preview;
-  if (matches === 0) return <div className="secondary tiny">Matches nothing yet. It will apply to new transactions that do.</div>;
+  if (matches === 0 && changes === 0)
+    return <div className="secondary tiny">Matches nothing yet. It will apply to new transactions that do.</div>;
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="secondary tiny" role="status">
         Matches {matches.toLocaleString("en-GB")} transaction{matches === 1 ? "" : "s"}
         {" · "}
         {changes === 0 ? "none would change" : `${changes.toLocaleString("en-GB")} would change`}
-        {matches > examples.length ? `. The latest ${examples.length}:` : ":"}
+        {matches + changes > examples.length ? `. The latest ${examples.length}:` : ":"}
       </div>
       <div className="table-wrap">
         <table>
@@ -288,6 +289,11 @@ function PreviewTable({ preview, problem }: { preview: RulePreview | null; probl
                 <td className="nowrap secondary">{dateLabel(row.date, true)}</td>
                 <td>
                   <Change before={row.merchant} after={row.new_merchant} />
+                  {!row.matched && (
+                    <span className="badge" style={{ marginLeft: 8 }} title="The rule matched it before this change">
+                      No longer matches
+                    </span>
+                  )}
                   <div className="muted tiny">
                     {row.description} · {row.account}
                   </div>
