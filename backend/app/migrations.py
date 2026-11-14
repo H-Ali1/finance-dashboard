@@ -83,12 +83,86 @@ def _v5_one_rule_per_pattern(conn: Connection) -> None:
     )
 
 
+def _v6_richer_rules(conn: Connection) -> None:
+    """Rules gain conditions (money in or out, amount, account, kind of
+    payment) and actions (rename the merchant, leave it out of the totals).
+    One rule per set of conditions now, not per pattern, so the rules table is
+    rebuilt. Transactions remember who renamed or excluded them."""
+    from .models import rule_signature
+
+    inspector = inspect(conn)
+    tables = inspector.get_table_names()
+    if "transactions" in tables:
+        existing = {col["name"] for col in inspector.get_columns("transactions")}
+        for name, ddl in (
+            ("merchant_source", "VARCHAR(8)"),
+            ("bank_merchant", "VARCHAR(160)"),
+            ("bank_merchant_key", "VARCHAR(160)"),
+            ("excluded_source", "VARCHAR(8)"),
+        ):
+            if name not in existing:
+                conn.exec_driver_sql(f"ALTER TABLE transactions ADD COLUMN {name} {ddl}")
+        # Left out of the totals before rules could do it: by you, so rules leave them be.
+        conn.exec_driver_sql(
+            "UPDATE transactions SET excluded_source = 'manual' WHERE excluded = 1 AND excluded_source IS NULL"
+        )
+
+    if "category_rules" not in tables:
+        return
+    if "signature" in {col["name"] for col in inspector.get_columns("category_rules")}:
+        # Created by this build's baseline: only the index step 5 added on the
+        # pattern alone has to go, as rules may now share a pattern.
+        conn.exec_driver_sql("DROP INDEX IF EXISTS uq_rule_pattern")
+        return
+
+    conn.exec_driver_sql(
+        "CREATE TABLE category_rules_v6 ("
+        "id INTEGER NOT NULL PRIMARY KEY, "
+        "pattern VARCHAR(160) NOT NULL, "
+        "match_type VARCHAR(16) NOT NULL, "
+        "field VARCHAR(16) NOT NULL, "
+        "direction VARCHAR(4), "
+        "amount_min_minor INTEGER, "
+        "amount_max_minor INTEGER, "
+        "account_id INTEGER, "
+        "payment_type VARCHAR(16), "
+        "category VARCHAR(48) NOT NULL, "
+        "rename_to VARCHAR(160), "
+        "exclude BOOLEAN NOT NULL, "
+        "priority INTEGER NOT NULL, "
+        "created_at DATETIME NOT NULL, "
+        "signature VARCHAR(512) NOT NULL, "
+        "CONSTRAINT uq_rule_signature UNIQUE (signature))"
+    )
+    conn.exec_driver_sql(
+        "INSERT INTO category_rules_v6 "
+        "(id, pattern, match_type, field, category, exclude, priority, created_at, signature) "
+        "SELECT id, COALESCE(pattern, ''), COALESCE(match_type, 'contains'), COALESCE(field, 'merchant'), "
+        "COALESCE(category, ''), 0, COALESCE(priority, 100), COALESCE(created_at, CURRENT_TIMESTAMP), "
+        "'pending:' || id FROM category_rules"
+    )
+    # Rules that only differed by a missing field are now the same rule: the
+    # latest of them stays, as in step 5.
+    seen: set[str] = set()
+    rows = conn.exec_driver_sql("SELECT id, pattern, match_type, field FROM category_rules_v6 ORDER BY id DESC").all()
+    for rule_id, pattern, match_type, field in rows:
+        signature = rule_signature(pattern=pattern, match_type=match_type, field=field)
+        if signature in seen:
+            conn.exec_driver_sql("DELETE FROM category_rules_v6 WHERE id = ?", (rule_id,))
+            continue
+        seen.add(signature)
+        conn.exec_driver_sql("UPDATE category_rules_v6 SET signature = ? WHERE id = ?", (signature, rule_id))
+    conn.exec_driver_sql("DROP TABLE category_rules")
+    conn.exec_driver_sql("ALTER TABLE category_rules_v6 RENAME TO category_rules")
+
+
 STEPS: list[Callable[[Connection], None]] = [
     _v1_baseline,
     _v2_connection_credentials,
     _v3_payment_type,
     _v4_account_date_index,
     _v5_one_rule_per_pattern,
+    _v6_richer_rules,
 ]
 LATEST = len(STEPS)
 

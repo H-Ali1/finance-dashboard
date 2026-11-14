@@ -9,6 +9,7 @@ never has to special-case an account type.
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from sqlalchemy import (
     JSON,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -122,7 +124,13 @@ class Transaction(Base):
     merchant: Mapped[str] = mapped_column(String(160), default="", index=True)
     merchant_key: Mapped[str] = mapped_column(String(160), default="", index=True)
     category: Mapped[str] = mapped_column(String(48), default="Uncategorised", index=True)
-    category_source: Mapped[str] = mapped_column(String(16), default="auto")  # auto|rule|manual
+    # auto|rule|manual|learned ("learned": guessed from the merchants you've categorised)
+    category_source: Mapped[str] = mapped_column(String(16), default="auto")
+    # Who named the merchant: None is the bank, "rule" a rule's rename, "manual" you.
+    merchant_source: Mapped[str | None] = mapped_column(String(8))
+    # The bank's name for it, kept while a rule or you have renamed it.
+    bank_merchant: Mapped[str | None] = mapped_column(String(160))
+    bank_merchant_key: Mapped[str | None] = mapped_column(String(160))
     provider_category: Mapped[str | None] = mapped_column(String(64))
     mcc: Mapped[str | None] = mapped_column(String(8))
     # card|direct_debit|standing_order|transfer|cash|interest|fee|internal|dividend,
@@ -132,6 +140,8 @@ class Transaction(Base):
     is_transfer: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     transfer_group: Mapped[str | None] = mapped_column(String(64))
     excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Who decided whether it counts: "rule" or "manual"; None when nobody has.
+    excluded_source: Mapped[str | None] = mapped_column(String(8))
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -139,19 +149,84 @@ class Transaction(Base):
 
 
 class CategoryRule(Base):
-    """User-defined override: "anything matching X is category Y"."""
+    """One of your rules: when a transaction meets every condition set here,
+    the actions apply. Named for its first job, setting a category.
+
+    Conditions (at least one): text in the merchant's name or the
+    description, money in or out, the size of the amount, the account, the
+    kind of payment. Actions (at least one): a category, a new name for the
+    merchant, leaving it out of the totals.
+    """
 
     __tablename__ = "category_rules"
-    # One rule per pattern: a second save changes the first.
-    __table_args__ = (UniqueConstraint("field", "match_type", "pattern", name="uq_rule_pattern"),)
+    # One rule per set of conditions: saving the same conditions again changes it.
+    __table_args__ = (UniqueConstraint("signature", name="uq_rule_signature"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    pattern: Mapped[str] = mapped_column(String(160))
+    # --- conditions
+    pattern: Mapped[str] = mapped_column(String(160), default="")  # "" is no text condition
     match_type: Mapped[str] = mapped_column(String(16), default="contains")  # contains|words|regex|exact
     field: Mapped[str] = mapped_column(String(16), default="merchant")  # merchant|description
-    category: Mapped[str] = mapped_column(String(48))
+    direction: Mapped[str | None] = mapped_column(String(4))  # in|out
+    # The size of the amount, in pence, whichever way the money went.
+    amount_min_minor: Mapped[int | None] = mapped_column(Integer)
+    amount_max_minor: Mapped[int | None] = mapped_column(Integer)
+    account_id: Mapped[int | None] = mapped_column(Integer)
+    payment_type: Mapped[str | None] = mapped_column(String(16))  # see categorise.PAYMENT_TYPES
+    # --- actions
+    category: Mapped[str] = mapped_column(String(48), default="")  # "" leaves the category alone
+    rename_to: Mapped[str | None] = mapped_column(String(160))
+    exclude: Mapped[bool] = mapped_column(Boolean, default=False)
+
     priority: Mapped[int] = mapped_column(Integer, default=100)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The conditions as one string, so the database itself refuses a second
+    # rule with the same ones. Filled in on every save.
+    signature: Mapped[str] = mapped_column(String(512))
+
+
+def rule_signature(
+    *,
+    pattern: str | None,
+    match_type: str | None,
+    field: str | None,
+    direction: str | None = None,
+    amount_min_minor: int | None = None,
+    amount_max_minor: int | None = None,
+    account_id: int | None = None,
+    payment_type: str | None = None,
+) -> str:
+    """The identity of a rule's conditions. Migration 6 fills it in for rules
+    saved before it existed, so changing this needs a migration too."""
+    return json.dumps(
+        [
+            field or "merchant",
+            match_type or "contains",
+            pattern or "",
+            direction,
+            amount_min_minor,
+            amount_max_minor,
+            account_id,
+            payment_type,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+@event.listens_for(CategoryRule, "before_insert")
+@event.listens_for(CategoryRule, "before_update")
+def _sign_rule(_mapper, _connection, rule: CategoryRule) -> None:
+    rule.signature = rule_signature(
+        pattern=rule.pattern,
+        match_type=rule.match_type,
+        field=rule.field,
+        direction=rule.direction,
+        amount_min_minor=rule.amount_min_minor,
+        amount_max_minor=rule.amount_max_minor,
+        account_id=rule.account_id,
+        payment_type=rule.payment_type,
+    )
 
 
 class Budget(Base):
